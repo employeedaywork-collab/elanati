@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, Clock, Edit3, Plus, Search, Star, Trash2, X } from 'lucide-react';
-import { EGYPT_GOVERNORATES } from '../../data/seedData';
+import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../../data/seedData';
 import {
   createAd,
   deleteAdAdmin,
@@ -10,8 +10,11 @@ import {
 } from '../../services/dataService';
 import { Ad, AdCategory, AdStatus } from '../../types';
 
+const CUSTOM_CATEGORY_VALUE = '__custom__';
+
 interface AdminAdsManagerProps {
   ads: Ad[];
+  categories?: string[];
   onRefresh: () => Promise<void>;
 }
 
@@ -22,17 +25,23 @@ const STATUS_META: Record<AdStatus, { label: string; cls: string }> = {
   archived: { label: 'مؤرشف', cls: 'bg-slate-100 text-slate-600 border border-slate-200' },
 };
 
-export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps) {
+export default function AdminAdsManager({
+  ads,
+  categories = DEFAULT_CATEGORIES,
+  onRefresh,
+}: AdminAdsManagerProps) {
   const [statusFilter, setStatusFilter] = useState<AdStatus | 'all' | 'expired'>('all');
   const [search, setSearch] = useState('');
   const [editingAd, setEditingAd] = useState<Ad | null>(null);
+  const [editCustomCategory, setEditCustomCategory] = useState('');
   const [creatingNew, setCreatingNew] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const [newAdForm, setNewAdForm] = useState({
     client_name: '',
     title: '',
-    category: 'توزيع' as AdCategory,
+    category: (categories[0] || 'توزيع') as AdCategory,
+    custom_category: '',
     description: '',
     contact: '',
     city: 'القاهرة',
@@ -112,6 +121,12 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAd) return;
+    const resolvedCategory =
+      editingAd.category === CUSTOM_CATEGORY_VALUE
+        ? editCustomCategory.trim().replace(/\s+/g, ' ')
+        : editingAd.category.trim();
+    if (resolvedCategory.length < 2) return;
+
     setBusyId(editingAd.id);
     try {
       const priorityRank =
@@ -123,7 +138,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
       await updateAdAdmin(editingAd.id, {
         client_name: editingAd.client_name || null,
         title: editingAd.title,
-        category: editingAd.category,
+        category: resolvedCategory,
         city: editingAd.city,
         contact: editingAd.contact,
         description: editingAd.description,
@@ -136,6 +151,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
         expires_at: editingAd.expires_at ?? null,
       });
       setEditingAd(null);
+      setEditCustomCategory('');
       await onRefresh();
     } finally {
       setBusyId(null);
@@ -144,10 +160,18 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
 
   const handleCreateAdminAd = async (e: React.FormEvent) => {
     e.preventDefault();
+    const resolvedCategory =
+      newAdForm.category === CUSTOM_CATEGORY_VALUE
+        ? newAdForm.custom_category.trim().replace(/\s+/g, ' ')
+        : newAdForm.category.trim();
+    if (resolvedCategory.length < 2) return;
+
     setBusyId('new');
     try {
+      const { custom_category: _unused, ...rest } = newAdForm;
       await createAd({
-        ...newAdForm,
+        ...rest,
+        category: resolvedCategory,
         asAdmin: true,
         requireApproval: false,
       });
@@ -155,7 +179,8 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
       setNewAdForm({
         client_name: '',
         title: '',
-        category: 'توزيع',
+        category: (categories[0] || 'توزيع') as AdCategory,
+        custom_category: '',
         description: '',
         contact: '',
         city: 'القاهرة',
@@ -357,7 +382,10 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                           </button>
                           <button
                             type="button"
-                            onClick={() => setEditingAd(ad)}
+                            onClick={() => {
+                              setEditingAd(ad);
+                              setEditCustomCategory('');
+                            }}
                             title="تعديل"
                             className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
                           >
@@ -418,9 +446,19 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 }
                 className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
               >
-                <option value="توزيع">توزيع</option>
-                <option value="تجارة">تجارة</option>
-                <option value="محلات">محلات</option>
+                {Array.from(
+                  new Set([
+                    ...categories,
+                    ...(editingAd.category && editingAd.category !== CUSTOM_CATEGORY_VALUE
+                      ? [editingAd.category]
+                      : []),
+                  ])
+                ).map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+                <option value={CUSTOM_CATEGORY_VALUE}>+ إضافة تصنيف جديد غير موجود...</option>
               </select>
               <select
                 value={editingAd.city}
@@ -434,6 +472,17 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 ))}
               </select>
             </div>
+            {editingAd.category === CUSTOM_CATEGORY_VALUE && (
+              <input
+                type="text"
+                required
+                maxLength={60}
+                placeholder="اكتب اسم التصنيف الجديد (سيتم حفظه ضمن القائمة)..."
+                value={editCustomCategory}
+                onChange={(e) => setEditCustomCategory(e.target.value)}
+                className="w-full px-4 py-2.5 border border-blue-200 bg-blue-50/40 rounded-xl text-sm"
+              />
+            )}
             <div className="grid grid-cols-2 gap-3">
               <input
                 type="tel"
@@ -577,9 +626,12 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 }
                 className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
               >
-                <option value="توزيع">توزيع</option>
-                <option value="تجارة">تجارة</option>
-                <option value="محلات">محلات</option>
+                {categories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+                <option value={CUSTOM_CATEGORY_VALUE}>+ إضافة تصنيف جديد غير موجود...</option>
               </select>
               <select
                 value={newAdForm.city}
@@ -593,6 +645,17 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 ))}
               </select>
             </div>
+            {newAdForm.category === CUSTOM_CATEGORY_VALUE && (
+              <input
+                type="text"
+                required
+                maxLength={60}
+                placeholder="اكتب اسم التصنيف الجديد (سيتم حفظه ضمن القائمة)..."
+                value={newAdForm.custom_category}
+                onChange={(e) => setNewAdForm({ ...newAdForm, custom_category: e.target.value })}
+                className="w-full px-4 py-2.5 border border-blue-200 bg-blue-50/40 rounded-xl text-sm"
+              />
+            )}
             <div className="grid grid-cols-2 gap-3">
               <select
                 value={newAdForm.package_name}

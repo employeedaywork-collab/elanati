@@ -6,31 +6,40 @@ import {
   EyeOff,
   Plus,
   Save,
+  Tags,
   Trash2,
   Wallet,
 } from 'lucide-react';
+import { DEFAULT_CATEGORIES } from '../../data/seedData';
 import {
+  addCategory,
   createTestimonialAdmin,
+  deleteCategoryAdmin,
   deleteTestimonialAdmin,
   updateSiteSettings,
   updateTestimonialAdmin,
 } from '../../services/dataService';
-import { SiteSettings, Testimonial } from '../../types';
+import { CategoryItem, SiteSettings, Testimonial } from '../../types';
 
 interface AdminContentSettingsProps {
   settings: SiteSettings;
   testimonials: Testimonial[];
+  categoryItems?: CategoryItem[];
   onRefresh: () => Promise<void>;
 }
 
 export default function AdminContentSettings({
   settings,
   testimonials,
+  categoryItems = [],
   onRefresh,
 }: AdminContentSettingsProps) {
   const [form, setForm] = useState<SiteSettings>(settings);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [addingCat, setAddingCat] = useState(false);
+  const [catError, setCatError] = useState('');
 
   const [newTestimonial, setNewTestimonial] = useState({
     name: '',
@@ -77,6 +86,31 @@ export default function AdminContentSettings({
       await onRefresh();
     } finally {
       setAddingTest(false);
+    }
+  };
+
+  const handleAddCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCatError('');
+    setAddingCat(true);
+    try {
+      await addCategory(newCategoryName);
+      setNewCategoryName('');
+      await onRefresh();
+    } catch (err: any) {
+      setCatError(err?.message || 'تعذر إضافة التصنيف');
+    } finally {
+      setAddingCat(false);
+    }
+  };
+
+  const handleDeleteCategory = async (item: CategoryItem) => {
+    setCatError('');
+    try {
+      await deleteCategoryAdmin(item.id);
+      await onRefresh();
+    } catch (err: any) {
+      setCatError(err?.message || 'تعذر حذف التصنيف');
     }
   };
 
@@ -314,6 +348,71 @@ export default function AdminContentSettings({
           </button>
         </div>
       </form>
+
+      {/* Dynamic Categories Management */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5">
+        <div>
+          <h2 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+            <Tags className="w-5 h-5 text-blue-700" />
+            إدارة تصنيفات الإعلانات الحالية
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            أي تصنيف جديد يضيفه المعلن أو الإدارة يتم حفظه هنا تلقائياً ويظهر في قائمة التصنيفات وفلتر الموقع
+          </p>
+        </div>
+
+        <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            required
+            maxLength={60}
+            value={newCategoryName}
+            onChange={(e) => setNewCategoryName(e.target.value)}
+            placeholder="أدخل اسم تصنيف جديد (مثال: مستلزمات طبية، قطع غيار...)"
+            className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-600"
+          />
+          <button
+            type="submit"
+            disabled={addingCat}
+            className="bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            {addingCat ? 'جاري الإضافة...' : 'إضافة وحفظ التصنيف'}
+          </button>
+        </form>
+
+        {catError && (
+          <p className="text-xs font-bold text-red-600">{catError}</p>
+        )}
+
+        <div className="flex flex-wrap gap-2.5">
+          {categoryItems.map((cat) => {
+            const isDefault = DEFAULT_CATEGORIES.includes(cat.name);
+            return (
+              <div
+                key={cat.id}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm font-bold text-slate-800"
+              >
+                <span>{cat.name}</span>
+                {isDefault ? (
+                  <span className="text-[10px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                    أساسي
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteCategory(cat)}
+                    title="حذف التصنيف"
+                    className="p-1 rounded-md text-red-600 hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5">
         <h2 className="font-extrabold text-slate-900 text-base">إدارة آراء العملاء</h2>

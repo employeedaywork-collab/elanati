@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS public.elanati_ads (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_name text,
   title text NOT NULL,
-  category text NOT NULL CHECK (category IN ('توزيع', 'تجارة', 'محلات')),
+  category text NOT NULL,
   description text NOT NULL,
   contact text NOT NULL,
   whatsapp text,
@@ -66,6 +66,21 @@ ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS subscription_code text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS priority_rank integer NOT NULL DEFAULT 0;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS starts_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+
+-- إزالة قيد التصنيفات الثابت إن وجد سابقاً للسماح بإضافة تصنيفات جديدة ديناميكياً
+DO $$
+DECLARE
+  v_con text;
+BEGIN
+  SELECT conname INTO v_con
+  FROM pg_constraint
+  WHERE conrelid = 'public.elanati_ads'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) ILIKE '%category%';
+  IF v_con IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE public.elanati_ads DROP CONSTRAINT %I', v_con);
+  END IF;
+END $$;
 
 -- ضبط تاريخ الانتهاء للإعلانات المجانية القديمة تلقائياً إن لم يكن مضبوطاً
 UPDATE public.elanati_ads
@@ -881,12 +896,49 @@ END;
 $$;
 
 -- ============================================================================
+-- 10) جدول التصنيفات الديناميكية (إضافة وحفظ التصنيفات الجديدة)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.elanati_categories (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  sort_order integer NOT NULL DEFAULT 10,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.elanati_categories ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can read active categories" ON public.elanati_categories;
+CREATE POLICY "Public can read active categories"
+  ON public.elanati_categories FOR SELECT
+  USING (is_active = true OR public.is_elanati_admin());
+
+DROP POLICY IF EXISTS "Public can insert custom categories" ON public.elanati_categories;
+CREATE POLICY "Public can insert custom categories"
+  ON public.elanati_categories FOR INSERT
+  WITH CHECK (length(trim(name)) BETWEEN 2 AND 60);
+
+DROP POLICY IF EXISTS "Admins can manage categories" ON public.elanati_categories;
+CREATE POLICY "Admins can manage categories"
+  ON public.elanati_categories FOR ALL
+  TO authenticated
+  USING (public.is_elanati_admin())
+  WITH CHECK (public.is_elanati_admin());
+
+INSERT INTO public.elanati_categories (name, sort_order, is_active)
+VALUES
+  ('توزيع', 1, true),
+  ('تجارة', 2, true),
+  ('محلات', 3, true)
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_ads TO anon, authenticated;
-GRANT INSERT ON public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests TO anon, authenticated;
-GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_automation_config, public.elanati_whatsapp_logs TO authenticated;
+GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_ads, public.elanati_categories TO anon, authenticated;
+GRANT INSERT ON public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_categories TO anon, authenticated;
+GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_categories TO authenticated;
 
 GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
@@ -919,6 +971,10 @@ BEGIN
     END;
     BEGIN
       ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_whatsapp_logs;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_categories;
     EXCEPTION WHEN duplicate_object THEN NULL;
     END;
   END IF;

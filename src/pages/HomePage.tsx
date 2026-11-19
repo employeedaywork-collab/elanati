@@ -14,6 +14,7 @@ import Stats from '../components/Stats';
 import SupportWidget from '../components/SupportWidget';
 import Testimonials from '../components/Testimonials';
 import {
+  DEFAULT_CATEGORIES,
   DEFAULT_SITE_SETTINGS,
   INITIAL_ADS,
   INITIAL_PACKAGES,
@@ -22,6 +23,7 @@ import {
 import { Sparkles, X } from 'lucide-react';
 import {
   createAd,
+  fetchCategories,
   fetchClientPortal,
   fetchPackages,
   fetchPublicAds,
@@ -37,6 +39,7 @@ import { Ad, AdCategory, PackagePlan, SiteSettings, Testimonial } from '../types
 export default function HomePage() {
   const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
   const [ads, setAds] = useState<Ad[]>(INITIAL_ADS);
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [packages, setPackages] = useState<PackagePlan[]>(INITIAL_PACKAGES);
   const [testimonials, setTestimonials] = useState<Testimonial[]>(INITIAL_TESTIMONIALS);
   const [loadingAds, setLoadingAds] = useState(true);
@@ -66,16 +69,24 @@ export default function HomePage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [loadedSettings, loadedAds, loadedPackages, loadedTestimonials, adminSess] =
-        await Promise.all([
-          fetchSiteSettings(),
-          fetchPublicAds(),
-          fetchPackages(),
-          fetchTestimonials(false),
-          getAdminSession().catch(() => null),
-        ]);
+      const [
+        loadedSettings,
+        loadedAds,
+        loadedCategories,
+        loadedPackages,
+        loadedTestimonials,
+        adminSess,
+      ] = await Promise.all([
+        fetchSiteSettings(),
+        fetchPublicAds(),
+        fetchCategories(),
+        fetchPackages(),
+        fetchTestimonials(false),
+        getAdminSession().catch(() => null),
+      ]);
       setSettings(loadedSettings);
       setAds(loadedAds);
+      setCategories(loadedCategories);
       setPackages(loadedPackages);
       setTestimonials(loadedTestimonials);
       setIsAdmin(Boolean(adminSess));
@@ -181,6 +192,10 @@ export default function HomePage() {
       ...input,
       requireApproval: settings.require_ad_approval,
     });
+    const refreshedCats = await fetchCategories().catch(() => null);
+    if (refreshedCats) {
+      setCategories(refreshedCats);
+    }
     if (!result.requiresReview) {
       const refreshed = await fetchPublicAds();
       setAds(refreshed);
@@ -233,6 +248,7 @@ export default function HomePage() {
         <Packages packages={packages} onSelectPackage={handleSelectPackage} />
         <Advertisements
           ads={ads}
+          categories={categories}
           loading={loadingAds}
           selectedCategory={selectedCategory}
           onCategoryChange={setSelectedCategory}
@@ -253,6 +269,7 @@ export default function HomePage() {
       {showAddAd && (
         <AddAdForm
           settings={settings}
+          categories={categories}
           onSubmit={handleCreateAd}
           onClose={() => setShowAddAd(false)}
           onUpgrade={scrollToPackages}

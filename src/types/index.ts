@@ -1,6 +1,14 @@
-export type AdCategory = 'توزيع' | 'تجارة' | 'محلات';
+export type AdCategory = string;
 export type AdStatus = 'pending' | 'approved' | 'rejected' | 'archived';
 export type PaymentMethod = 'vodafone_cash' | 'instapay' | 'bank_transfer';
+
+export interface CategoryItem {
+  id: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at?: string;
+}
 
 export interface Ad {
   id: string;

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Clock, Crown, Image as ImageIcon, Search, Star } from 'lucide-react';
-import { EGYPT_GOVERNORATES } from '../data/seedData';
+import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../data/seedData';
 import { getRemainingDays } from '../services/dataService';
 import { Ad, AdCategory } from '../types';
 
 interface AdvertisementsProps {
   ads: Ad[];
+  categories?: string[];
   loading?: boolean;
   selectedCategory: AdCategory | 'الكل';
   onCategoryChange: (category: AdCategory | 'الكل') => void;
@@ -15,6 +16,7 @@ interface AdvertisementsProps {
 
 export default function Advertisements({
   ads,
+  categories: propCategories = DEFAULT_CATEGORIES,
   loading = false,
   selectedCategory,
   onCategoryChange,
@@ -24,7 +26,7 @@ export default function Advertisements({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCity, setSelectedCity] = useState('الكل');
 
-  const categories: (AdCategory | 'الكل')[] = ['الكل', 'توزيع', 'تجارة', 'محلات'];
+  const categories: (AdCategory | 'الكل')[] = ['الكل', ...propCategories];
 
   const filteredAds = ads.filter((ad) => {
     const matchesCategory = selectedCategory === 'الكل' || ad.category === selectedCategory;

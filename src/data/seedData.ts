@@ -1,5 +1,7 @@
 import { Ad, AutomationConfig, PackagePlan, SiteSettings, Testimonial } from '../types';
 
+export const DEFAULT_CATEGORIES: string[] = ['توزيع', 'تجارة', 'محلات'];
+
 export const EGYPT_GOVERNORATES: string[] = [
   'القاهرة',
   'الجيزة',

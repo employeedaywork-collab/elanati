@@ -1,5 +1,6 @@
 import {
   DEFAULT_AUTOMATION_CONFIG,
+  DEFAULT_CATEGORIES,
   DEFAULT_SITE_SETTINGS,
   INITIAL_ADS,
   INITIAL_PACKAGES,
@@ -15,6 +16,7 @@ import {
   AutomationConfig,
   AutomationRunResult,
   AutomationTargetPreview,
+  CategoryItem,
   ClientPortalData,
   ContactMessage,
   PackagePlan,
@@ -30,6 +32,7 @@ import {
 
 const STORAGE_KEYS = {
   ads: 'elanati_local_ads_v1',
+  categories: 'elanati_local_categories_v1',
   messages: 'elanati_local_messages_v1',
   support: 'elanati_local_support_v1',
   packageRequests: 'elanati_local_pkg_requests_v1',
@@ -156,6 +159,188 @@ export async function updateSiteSettings(patch: Partial<SiteSettings>): Promise<
 
   writeLocal(STORAGE_KEYS.settings, updated);
   return updated;
+}
+
+// ============================================================================
+// Categories (Dynamic Custom Categories)
+// ============================================================================
+function mergeUniqueCategories(...lists: string[][]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const list of lists) {
+    for (const raw of list) {
+      const clean = (raw || '').trim();
+      if (clean && !seen.has(clean)) {
+        seen.add(clean);
+        result.push(clean);
+      }
+    }
+  }
+  return result;
+}
+
+export async function fetchCategories(): Promise<string[]> {
+  if (supabase) {
+    const [catRes, adsRes] = await Promise.all([
+      supabase
+        .from('elanati_categories')
+        .select('name')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+        .order('created_at', { ascending: true }),
+      supabase.from('elanati_ads').select('category').eq('status', 'approved'),
+    ]);
+
+    const dbCategories =
+      !catRes.error && Array.isArray(catRes.data)
+        ? catRes.data.map((row: any) => String(row.name || ''))
+        : [];
+    const adCategories =
+      !adsRes.error && Array.isArray(adsRes.data)
+        ? adsRes.data.map((row: any) => String(row.category || ''))
+        : [];
+
+    if (!catRes.error || !adsRes.error) {
+      return mergeUniqueCategories(DEFAULT_CATEGORIES, dbCategories, adCategories);
+    }
+  }
+
+  const localCats = readLocal<CategoryItem[]>(
+    STORAGE_KEYS.categories,
+    DEFAULT_CATEGORIES.map((name, idx) => ({
+      id: `cat-default-${idx}`,
+      name,
+      sort_order: idx + 1,
+      is_active: true,
+    }))
+  )
+    .filter((c) => c.is_active)
+    .map((c) => c.name);
+  const localAds = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS).map((a) => a.category);
+
+  return mergeUniqueCategories(DEFAULT_CATEGORIES, localCats, localAds);
+}
+
+export async function fetchCategoryItemsAdmin(): Promise<CategoryItem[]> {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('elanati_categories')
+      .select('*')
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (!error && Array.isArray(data)) {
+      return data as CategoryItem[];
+    }
+  }
+
+  const existing = readLocal<CategoryItem[]>(
+    STORAGE_KEYS.categories,
+    DEFAULT_CATEGORIES.map((name, idx) => ({
+      id: `cat-default-${idx}`,
+      name,
+      sort_order: idx + 1,
+      is_active: true,
+    }))
+  );
+
+  // Also ensure any ad categories are represented
+  const existingNames = new Set(existing.map((c) => c.name.trim()));
+  const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  const extras: CategoryItem[] = [];
+  for (const ad of ads) {
+    const clean = (ad.category || '').trim();
+    if (clean && !existingNames.has(clean)) {
+      existingNames.add(clean);
+      extras.push({
+        id: generateId('cat'),
+        name: clean,
+        sort_order: 10 + existing.length + extras.length,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  if (extras.length > 0) {
+    const merged = [...existing, ...extras];
+    writeLocal(STORAGE_KEYS.categories, merged);
+    return merged;
+  }
+
+  return existing;
+}
+
+export async function addCategory(name: string): Promise<string> {
+  const clean = name.trim().replace(/\s+/g, ' ');
+  if (clean.length < 2 || clean.length > 60) {
+    throw new Error('اسم التصنيف يجب أن يكون بين حرفين و60 حرفاً');
+  }
+
+  if (supabase) {
+    const { data: existing } = await supabase
+      .from('elanati_categories')
+      .select('id, name, is_active')
+      .eq('name', clean)
+      .maybeSingle();
+
+    if (existing) {
+      if (!existing.is_active) {
+        await supabase
+          .from('elanati_categories')
+          .update({ is_active: true })
+          .eq('id', existing.id);
+      }
+      return existing.name;
+    }
+
+    const { error } = await supabase.from('elanati_categories').insert({
+      name: clean,
+      sort_order: 20,
+      is_active: true,
+    });
+
+    // Ignore duplicate race condition (23505)
+    if (error && !error.message.toLowerCase().includes('duplicate')) {
+      throw new Error(error.message);
+    }
+    return clean;
+  }
+
+  const current = await fetchCategoryItemsAdmin();
+  const exists = current.find((c) => c.name.trim() === clean);
+  if (exists) {
+    if (!exists.is_active) {
+      writeLocal(
+        STORAGE_KEYS.categories,
+        current.map((c) => (c.id === exists.id ? { ...c, is_active: true } : c))
+      );
+    }
+    return clean;
+  }
+
+  const nextItem: CategoryItem = {
+    id: generateId('cat'),
+    name: clean,
+    sort_order: current.length + 1,
+    is_active: true,
+    created_at: new Date().toISOString(),
+  };
+  writeLocal(STORAGE_KEYS.categories, [...current, nextItem]);
+  return clean;
+}
+
+export async function deleteCategoryAdmin(id: string): Promise<void> {
+  if (supabase) {
+    const { error } = await supabase.from('elanati_categories').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const current = await fetchCategoryItemsAdmin();
+  writeLocal(
+    STORAGE_KEYS.categories,
+    current.filter((c) => c.id !== id)
+  );
 }
 
 // ============================================================================
@@ -424,11 +609,16 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
   const requiresReview = input.asAdmin ? false : (input.requireApproval ?? settings.require_ad_approval);
   const status: AdStatus = requiresReview ? 'pending' : 'approved';
 
+  const cleanCategory = input.category.trim().replace(/\s+/g, ' ');
+  if (cleanCategory.length < 2) {
+    throw new Error('يرجى اختيار أو كتابة اسم تصنيف صحيح');
+  }
+
   const newAd: Ad = {
     id: generateId('ad'),
     client_name: input.client_name?.trim() || null,
     title: input.title.trim(),
-    category: input.category,
+    category: cleanCategory,
     description: input.description.trim(),
     contact: input.contact.trim(),
     whatsapp: normalizePhoneToWhatsApp(input.contact.trim()),
@@ -448,6 +638,12 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     created_at: nowIso,
     updated_at: nowIso,
   };
+
+  try {
+    await addCategory(cleanCategory);
+  } catch {
+    // non-fatal if categories table hasn't been created yet
+  }
 
   if (supabase) {
     const { error } = await supabase.from('elanati_ads').insert({
@@ -482,8 +678,18 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
 }
 
 export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad> {
+  const cleanCategory = patch.category ? patch.category.trim().replace(/\s+/g, ' ') : undefined;
+  if (cleanCategory) {
+    try {
+      await addCategory(cleanCategory);
+    } catch {
+      // non-fatal
+    }
+  }
+
   const updatedPatch = {
     ...patch,
+    ...(cleanCategory ? { category: cleanCategory } : {}),
     updated_at: new Date().toISOString(),
   };
 

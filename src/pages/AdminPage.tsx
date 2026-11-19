@@ -22,6 +22,7 @@ import AdminInbox from '../components/admin/AdminInbox';
 import AdminOverview from '../components/admin/AdminOverview';
 import AdminPackagesManager from '../components/admin/AdminPackagesManager';
 import {
+  DEFAULT_CATEGORIES,
   DEFAULT_SITE_SETTINGS,
   INITIAL_PACKAGES,
 } from '../data/seedData';
@@ -30,6 +31,8 @@ import {
   archiveExpiredAdsAdmin,
   fetchAllAdsAdmin,
   fetchAllTicketsAdmin,
+  fetchCategories,
+  fetchCategoryItemsAdmin,
   fetchPackageRequestsAdmin,
   fetchPackages,
   fetchSiteSettings,
@@ -41,6 +44,7 @@ import {
 import {
   Ad,
   AdminSession,
+  CategoryItem,
   ContactMessage,
   PackagePlan,
   PackageRequest,
@@ -66,6 +70,8 @@ export default function AdminPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [ads, setAds] = useState<Ad[]>([]);
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [categoryItems, setCategoryItems] = useState<CategoryItem[]>([]);
   const [tickets, setTickets] = useState<ContactMessage[]>([]);
   const [packageRequests, setPackageRequests] = useState<PackageRequest[]>([]);
   const [packages, setPackages] = useState<PackagePlan[]>(INITIAL_PACKAGES);
@@ -82,6 +88,8 @@ export default function AdminPage() {
       await archiveExpiredAdsAdmin().catch(() => 0);
       const [
         loadedAds,
+        loadedCategories,
+        loadedCategoryItems,
         loadedTickets,
         loadedRequests,
         loadedPackages,
@@ -89,6 +97,8 @@ export default function AdminPage() {
         loadedSettings,
       ] = await Promise.all([
         fetchAllAdsAdmin(),
+        fetchCategories(),
+        fetchCategoryItemsAdmin(),
         fetchAllTicketsAdmin(),
         fetchPackageRequestsAdmin(),
         fetchPackages(),
@@ -96,6 +106,8 @@ export default function AdminPage() {
         fetchSiteSettings(),
       ]);
       setAds(loadedAds);
+      setCategories(loadedCategories);
+      setCategoryItems(loadedCategoryItems);
       setTickets(loadedTickets);
       setPackageRequests(loadedRequests);
       setPackages(loadedPackages);
@@ -158,6 +170,11 @@ export default function AdminPage() {
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'elanati_package_requests' },
+          () => void refreshAll()
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_categories' },
           () => void refreshAll()
         )
         .subscribe();
@@ -430,7 +447,9 @@ export default function AdminPage() {
             />
           )}
 
-          {activeTab === 'ads' && <AdminAdsManager ads={ads} onRefresh={refreshAll} />}
+          {activeTab === 'ads' && (
+            <AdminAdsManager ads={ads} categories={categories} onRefresh={refreshAll} />
+          )}
 
           {activeTab === 'inbox' && (
             <AdminInbox
@@ -455,6 +474,7 @@ export default function AdminPage() {
             <AdminContentSettings
               settings={settings}
               testimonials={testimonials}
+              categoryItems={categoryItems}
               onRefresh={refreshAll}
             />
           )}

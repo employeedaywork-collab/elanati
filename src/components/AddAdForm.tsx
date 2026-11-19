@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ImagePlus, Sparkles, X } from 'lucide-react';
-import { EGYPT_GOVERNORATES } from '../data/seedData';
+import { CheckCircle2, ImagePlus, PlusCircle, Sparkles, X } from 'lucide-react';
+import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../data/seedData';
 import { checkAdAllowance } from '../services/dataService';
 import { AdAllowance, AdCategory, SiteSettings } from '../types';
 
+const CUSTOM_CATEGORY_VALUE = '__custom__';
+
 interface AddAdFormProps {
   settings: SiteSettings;
+  categories?: string[];
   onSubmit: (ad: {
     client_name: string;
     title: string;
@@ -26,6 +29,7 @@ interface AddAdFormProps {
 
 export default function AddAdForm({
   settings,
+  categories = DEFAULT_CATEGORIES,
   onSubmit,
   onClose,
   onUpgrade,
@@ -45,7 +49,8 @@ export default function AddAdForm({
     return {
       client_name: savedName,
       title: '',
-      category: 'توزيع' as AdCategory,
+      category: (categories[0] || 'توزيع') as AdCategory,
+      custom_category: '',
       description: '',
       contact: savedPhone,
       city: '',
@@ -90,12 +95,20 @@ export default function AddAdForm({
       setError('يرجى إدخال رقم هاتف مصري صحيح (11 رقم)');
       return;
     }
+    const resolvedCategory =
+      formData.category === CUSTOM_CATEGORY_VALUE
+        ? formData.custom_category.trim().replace(/\s+/g, ' ')
+        : formData.category.trim();
+    if (resolvedCategory.length < 2) {
+      setError('يرجى كتابة اسم التصنيف الجديد (حرفين على الأقل)');
+      return;
+    }
     setSubmitting(true);
     try {
       const result = await onSubmit({
         client_name: formData.client_name.trim(),
         title: formData.title,
-        category: formData.category,
+        category: resolvedCategory,
         description: formData.description,
         contact: formData.contact,
         city: formData.city,
@@ -313,9 +326,12 @@ export default function AddAdForm({
                   }
                   className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none bg-white text-sm"
                 >
-                  <option value="توزيع">توزيع</option>
-                  <option value="تجارة">تجارة</option>
-                  <option value="محلات">محلات</option>
+                  {categories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                  <option value={CUSTOM_CATEGORY_VALUE}>+ إضافة تصنيف جديد غير موجود...</option>
                 </select>
               </div>
 
@@ -336,6 +352,24 @@ export default function AddAdForm({
                 </select>
               </div>
             </div>
+
+            {formData.category === CUSTOM_CATEGORY_VALUE && (
+              <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-200 space-y-1.5">
+                <label className="block text-xs font-extrabold text-blue-900 flex items-center gap-1.5">
+                  <PlusCircle className="w-4 h-4 text-blue-700" />
+                  اكتب اسم التصنيف الجديد (سيتم حفظه تلقائياً ضمن التصنيفات الحالية) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={60}
+                  value={formData.custom_category}
+                  onChange={(e) => setFormData({ ...formData, custom_category: e.target.value })}
+                  placeholder="مثال: مستلزمات طبية، قطع غيار، تعبئة وتغليف..."
+                  className="w-full px-4 py-2.5 border border-blue-200 rounded-xl bg-white focus:ring-2 focus:ring-blue-600 outline-none text-sm"
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-bold text-slate-700 mb-1.5">وصف الإعلان *</label>

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- منصة إعلاناتي (Elanati) - Supabase PostgreSQL Schema + RLS + RPC + Seed Data
--- آمن للتشغيل في نفس مشروع Supabase دون تعارض مع جداول Work-System الحالية
+-- متوافق للتشغيل الجديد أو التحديث الآمن على الجداول الحالية
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS public.elanati_admins (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- دالة مساعدة للتحقق من صلاحية المدير في سياسات RLS
 CREATE OR REPLACE FUNCTION public.is_elanati_admin()
 RETURNS boolean
 LANGUAGE sql
@@ -27,12 +26,12 @@ AS $$
     SELECT 1
     FROM public.elanati_admins a
     WHERE a.user_id = auth.uid()
-       OR (auth.jwt() ->> 'email') IS NOT NULL
-          AND lower(a.email) = lower(auth.jwt() ->> 'email')
+       OR ((auth.jwt() ->> 'email') IS NOT NULL
+           AND lower(a.email) = lower(auth.jwt() ->> 'email'))
   );
 $$;
 
--- 2) جدول الإعلانات
+-- 2) جدول الإعلانات (مع مدة الظهور التلقائية والصور الإضافية والبانر والأولوية)
 CREATE TABLE IF NOT EXISTS public.elanati_ads (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   title text NOT NULL,
@@ -43,16 +42,46 @@ CREATE TABLE IF NOT EXISTS public.elanati_ads (
   city text NOT NULL,
   image text NOT NULL DEFAULT '📦',
   image_url text,
+  extra_images jsonb NOT NULL DEFAULT '[]'::jsonb,
+  banner_url text,
   package_name text NOT NULL DEFAULT 'مجاني',
+  subscription_code text,
+  priority_rank integer NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'archived')),
   featured boolean NOT NULL DEFAULT false,
   views_count integer NOT NULL DEFAULT 0,
   admin_note text,
+  starts_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- تحديث آمن إذا كان الجدول منشأً مسبقاً
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS extra_images jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS banner_url text;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS subscription_code text;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS priority_rank integer NOT NULL DEFAULT 0;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS starts_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+
+-- ضبط تاريخ الانتهاء للإعلانات المجانية القديمة تلقائياً إن لم يكن مضبوطاً
+UPDATE public.elanati_ads
+SET starts_at = COALESCE(starts_at, created_at),
+    expires_at = CASE
+      WHEN package_name = 'مجاني' AND expires_at IS NULL THEN COALESCE(starts_at, created_at) + interval '7 days'
+      WHEN package_name = 'الاحترافي' AND expires_at IS NULL THEN COALESCE(starts_at, created_at) + interval '30 days'
+      ELSE expires_at
+    END,
+    priority_rank = CASE
+      WHEN package_name = 'المؤسسي' THEN 2
+      WHEN package_name = 'الاحترافي' OR featured = true THEN 1
+      ELSE 0
+    END;
+
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_status_created ON public.elanati_ads (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_elanati_ads_expires ON public.elanati_ads (expires_at);
+CREATE INDEX IF NOT EXISTS idx_elanati_ads_contact ON public.elanati_ads (contact);
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_category ON public.elanati_ads (category);
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_city ON public.elanati_ads (city);
 
@@ -67,14 +96,17 @@ CREATE TABLE IF NOT EXISTS public.elanati_contact_messages (
   message text NOT NULL,
   ad_id uuid REFERENCES public.elanati_ads(id) ON DELETE SET NULL,
   status text NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'in_progress', 'replied', 'closed')),
+  priority boolean NOT NULL DEFAULT false,
   admin_reply text,
   replied_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.elanati_contact_messages ADD COLUMN IF NOT EXISTS priority boolean NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS idx_elanati_contact_status ON public.elanati_contact_messages (status, created_at DESC);
 
--- 4) جدول رسائل المحادثة المتبادلة بين العميل والمدير لكل تذكرة
+-- 4) جدول رسائل المحادثة المتبادلة بين العميل والمدير
 CREATE TABLE IF NOT EXISTS public.elanati_support_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   ticket_code text NOT NULL REFERENCES public.elanati_contact_messages(ticket_code) ON DELETE CASCADE,
@@ -86,21 +118,43 @@ CREATE TABLE IF NOT EXISTS public.elanati_support_messages (
 
 CREATE INDEX IF NOT EXISTS idx_elanati_support_ticket ON public.elanati_support_messages (ticket_code, created_at ASC);
 
--- 5) جدول طلبات الباقات والاشتراكات
+-- 5) جدول طلبات الباقات والاشتراكات (مع الدفع بالجنيه المصري وتواريخ الاشتراك)
 CREATE TABLE IF NOT EXISTS public.elanati_package_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  subscription_code text UNIQUE,
   package_name text NOT NULL,
   billing_cycle text NOT NULL DEFAULT 'monthly' CHECK (billing_cycle IN ('monthly', 'annual')),
   price_egp numeric NOT NULL DEFAULT 0,
+  payment_method text NOT NULL DEFAULT 'vodafone_cash',
+  payment_reference text,
   client_name text NOT NULL,
   client_phone text NOT NULL,
   client_email text,
   company_name text,
   notes text,
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'contacted', 'activated', 'cancelled')),
+  max_ads integer NOT NULL DEFAULT 10,
+  starts_at timestamptz,
+  expires_at timestamptz,
+  api_key text,
+  account_manager_name text,
+  account_manager_phone text,
   admin_note text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS subscription_code text;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS payment_method text NOT NULL DEFAULT 'vodafone_cash';
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS payment_reference text;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS max_ads integer NOT NULL DEFAULT 10;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS starts_at timestamptz;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS api_key text;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS account_manager_name text;
+ALTER TABLE public.elanati_package_requests ADD COLUMN IF NOT EXISTS account_manager_phone text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_elanati_pkg_req_sub_code ON public.elanati_package_requests (subscription_code) WHERE subscription_code IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_elanati_pkg_req_phone ON public.elanati_package_requests (client_phone);
 
 -- 6) جدول الباقات الديناميكية
 CREATE TABLE IF NOT EXISTS public.elanati_packages (
@@ -130,7 +184,7 @@ CREATE TABLE IF NOT EXISTS public.elanati_testimonials (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 8) جدول إعدادات الموقع والإحصائيات
+-- 8) جدول إعدادات الموقع والإحصائيات والمدفوعات ومدة الإعلانات
 CREATE TABLE IF NOT EXISTS public.elanati_site_settings (
   id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   site_name text NOT NULL DEFAULT 'إعلاناتي',
@@ -143,8 +197,21 @@ CREATE TABLE IF NOT EXISTS public.elanati_site_settings (
   stat_traders integer NOT NULL DEFAULT 3500,
   stat_satisfaction integer NOT NULL DEFAULT 98,
   require_ad_approval boolean NOT NULL DEFAULT true,
+  free_ad_days integer NOT NULL DEFAULT 7,
+  pro_ad_days integer NOT NULL DEFAULT 30,
+  vodafone_cash_number text NOT NULL DEFAULT '01007008707',
+  instapay_handle text NOT NULL DEFAULT '01007008707',
+  bank_account_info text NOT NULL DEFAULT 'تحويل بنكي أو إنستاباي على رقم 01007008707',
+  payment_instructions text NOT NULL DEFAULT 'يرجى التحويل بالجنيه المصري ثم كتابة رقم المحفظة أو رقم مرجع العملية لتأكيد الاشتراك فوراً.',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.elanati_site_settings ADD COLUMN IF NOT EXISTS free_ad_days integer NOT NULL DEFAULT 7;
+ALTER TABLE public.elanati_site_settings ADD COLUMN IF NOT EXISTS pro_ad_days integer NOT NULL DEFAULT 30;
+ALTER TABLE public.elanati_site_settings ADD COLUMN IF NOT EXISTS vodafone_cash_number text NOT NULL DEFAULT '01007008707';
+ALTER TABLE public.elanati_site_settings ADD COLUMN IF NOT EXISTS instapay_handle text NOT NULL DEFAULT '01007008707';
+ALTER TABLE public.elanati_site_settings ADD COLUMN IF NOT EXISTS bank_account_info text NOT NULL DEFAULT 'تحويل بنكي أو إنستاباي على رقم 01007008707';
+ALTER TABLE public.elanati_site_settings ADD COLUMN IF NOT EXISTS payment_instructions text NOT NULL DEFAULT 'يرجى التحويل بالجنيه المصري ثم كتابة رقم المحفظة أو رقم مرجع العملية لتأكيد الاشتراك فوراً.';
 
 -- ============================================================================
 -- تفعيل Row Level Security (RLS)
@@ -158,18 +225,20 @@ ALTER TABLE public.elanati_packages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.elanati_testimonials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.elanati_site_settings ENABLE ROW LEVEL SECURITY;
 
--- سياسات elanati_admins
 DROP POLICY IF EXISTS "Admins can view own admin record" ON public.elanati_admins;
 CREATE POLICY "Admins can view own admin record"
   ON public.elanati_admins FOR SELECT
   TO authenticated
   USING (public.is_elanati_admin());
 
--- سياسات elanati_ads
+-- الإعلانات العامة: تظهر فقط الإعلانات المعتمدة التي لم ينتهِ تاريخ صلاحيتها (expires_at)
 DROP POLICY IF EXISTS "Public can read approved ads" ON public.elanati_ads;
 CREATE POLICY "Public can read approved ads"
   ON public.elanati_ads FOR SELECT
-  USING (status = 'approved' OR public.is_elanati_admin());
+  USING (
+    (status = 'approved' AND (expires_at IS NULL OR expires_at > now()))
+    OR public.is_elanati_admin()
+  );
 
 DROP POLICY IF EXISTS "Public can submit new ads" ON public.elanati_ads;
 CREATE POLICY "Public can submit new ads"
@@ -192,7 +261,6 @@ CREATE POLICY "Admins can delete ads"
   TO authenticated
   USING (public.is_elanati_admin());
 
--- سياسات elanati_contact_messages
 DROP POLICY IF EXISTS "Public can create contact tickets" ON public.elanati_contact_messages;
 CREATE POLICY "Public can create contact tickets"
   ON public.elanati_contact_messages FOR INSERT
@@ -205,7 +273,6 @@ CREATE POLICY "Admins can manage contact tickets"
   USING (public.is_elanati_admin())
   WITH CHECK (public.is_elanati_admin());
 
--- سياسات elanati_support_messages
 DROP POLICY IF EXISTS "Clients can append messages to tickets" ON public.elanati_support_messages;
 CREATE POLICY "Clients can append messages to tickets"
   ON public.elanati_support_messages FOR INSERT
@@ -218,7 +285,6 @@ CREATE POLICY "Admins can manage support messages"
   USING (public.is_elanati_admin())
   WITH CHECK (public.is_elanati_admin());
 
--- سياسات elanati_package_requests
 DROP POLICY IF EXISTS "Public can submit package requests" ON public.elanati_package_requests;
 CREATE POLICY "Public can submit package requests"
   ON public.elanati_package_requests FOR INSERT
@@ -231,7 +297,6 @@ CREATE POLICY "Admins can manage package requests"
   USING (public.is_elanati_admin())
   WITH CHECK (public.is_elanati_admin());
 
--- سياسات elanati_packages
 DROP POLICY IF EXISTS "Public can read active packages" ON public.elanati_packages;
 CREATE POLICY "Public can read active packages"
   ON public.elanati_packages FOR SELECT
@@ -244,7 +309,6 @@ CREATE POLICY "Admins can manage packages"
   USING (public.is_elanati_admin())
   WITH CHECK (public.is_elanati_admin());
 
--- سياسات elanati_testimonials
 DROP POLICY IF EXISTS "Public can read visible testimonials" ON public.elanati_testimonials;
 CREATE POLICY "Public can read visible testimonials"
   ON public.elanati_testimonials FOR SELECT
@@ -257,7 +321,6 @@ CREATE POLICY "Admins can manage testimonials"
   USING (public.is_elanati_admin())
   WITH CHECK (public.is_elanati_admin());
 
--- سياسات elanati_site_settings
 DROP POLICY IF EXISTS "Public can read site settings" ON public.elanati_site_settings;
 CREATE POLICY "Public can read site settings"
   ON public.elanati_site_settings FOR SELECT
@@ -271,7 +334,7 @@ CREATE POLICY "Admins can update site settings"
   WITH CHECK (public.is_elanati_admin());
 
 -- ============================================================================
--- دوال RPC آمنة للعملاء (متابعة التذكرة + عداد المشاهدات)
+-- دوال RPC للعملاء (مشاهدات + تذاكر + بوابة متابعة اشتراك العميل + فحص الحصة)
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.increment_elanati_ad_views(p_ad_id uuid)
 RETURNS void
@@ -281,7 +344,9 @@ SET search_path = public
 AS $$
   UPDATE public.elanati_ads
   SET views_count = views_count + 1
-  WHERE id = p_ad_id AND status = 'approved';
+  WHERE id = p_ad_id
+    AND status = 'approved'
+    AND (expires_at IS NULL OR expires_at > now());
 $$;
 
 CREATE OR REPLACE FUNCTION public.get_elanati_ticket_by_code(p_ticket_code text)
@@ -342,27 +407,184 @@ AS $$
   ORDER BY sm.created_at ASC;
 $$;
 
+-- بوابة العميل: الاستعلام برقم الهاتف أو كود الاشتراك لمعرفة تاريخ البداية والنهاية والعداد التنازلي وإعلاناته
+CREATE OR REPLACE FUNCTION public.get_elanati_client_portal(p_query text)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_clean text := trim(COALESCE(p_query, ''));
+  v_digits text := regexp_replace(v_clean, '\D', '', 'g');
+  v_sub record;
+  v_phone text := NULL;
+  v_ads jsonb;
+BEGIN
+  IF v_clean = '' THEN
+    RETURN jsonb_build_object('subscription', NULL, 'ads', '[]'::jsonb);
+  END IF;
+
+  -- البحث أولاً بكود الاشتراك أو رقم الهاتف عن أحدث طلب اشتراك
+  SELECT *
+  INTO v_sub
+  FROM public.elanati_package_requests r
+  WHERE (r.subscription_code IS NOT NULL AND upper(trim(r.subscription_code)) = upper(v_clean))
+     OR (v_digits <> '' AND regexp_replace(r.client_phone, '\D', '', 'g') = v_digits)
+  ORDER BY
+    CASE WHEN r.status = 'activated' THEN 0 ELSE 1 END,
+    r.created_at DESC
+  LIMIT 1;
+
+  IF v_sub.id IS NOT NULL THEN
+    v_phone := regexp_replace(v_sub.client_phone, '\D', '', 'g');
+  ELSE
+    v_phone := v_digits;
+  END IF;
+
+  SELECT COALESCE(jsonb_agg(row_to_json(a) ORDER BY a.created_at DESC), '[]'::jsonb)
+  INTO v_ads
+  FROM (
+    SELECT
+      id, title, category, description, contact, city, image, image_url,
+      extra_images, banner_url, package_name, subscription_code, priority_rank,
+      status, featured, views_count, starts_at, expires_at, created_at
+    FROM public.elanati_ads
+    WHERE (v_sub.subscription_code IS NOT NULL AND upper(COALESCE(subscription_code, '')) = upper(v_sub.subscription_code))
+       OR (v_phone <> '' AND regexp_replace(contact, '\D', '', 'g') = v_phone)
+  ) a;
+
+  RETURN jsonb_build_object(
+    'subscription',
+    CASE WHEN v_sub.id IS NOT NULL THEN jsonb_build_object(
+      'id', v_sub.id,
+      'subscription_code', v_sub.subscription_code,
+      'package_name', v_sub.package_name,
+      'billing_cycle', v_sub.billing_cycle,
+      'price_egp', v_sub.price_egp,
+      'payment_method', v_sub.payment_method,
+      'payment_reference', v_sub.payment_reference,
+      'client_name', v_sub.client_name,
+      'client_phone', v_sub.client_phone,
+      'company_name', v_sub.company_name,
+      'status', v_sub.status,
+      'max_ads', v_sub.max_ads,
+      'starts_at', v_sub.starts_at,
+      'expires_at', v_sub.expires_at,
+      'api_key', v_sub.api_key,
+      'account_manager_name', v_sub.account_manager_name,
+      'account_manager_phone', v_sub.account_manager_phone,
+      'created_at', v_sub.created_at
+    ) ELSE NULL END,
+    'ads', v_ads
+  );
+END;
+$$;
+
+-- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد
+CREATE OR REPLACE FUNCTION public.check_elanati_ad_allowance(
+  p_contact text,
+  p_subscription_code text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_digits text := regexp_replace(COALESCE(p_contact, ''), '\D', '', 'g');
+  v_code text := upper(trim(COALESCE(p_subscription_code, '')));
+  v_sub record;
+  v_active_ads integer := 0;
+  v_free_days integer := 7;
+  v_pro_days integer := 30;
+BEGIN
+  SELECT free_ad_days, pro_ad_days
+  INTO v_free_days, v_pro_days
+  FROM public.elanati_site_settings
+  WHERE id = 1;
+
+  v_free_days := COALESCE(v_free_days, 7);
+  v_pro_days := COALESCE(v_pro_days, 30);
+
+  SELECT *
+  INTO v_sub
+  FROM public.elanati_package_requests r
+  WHERE r.status = 'activated'
+    AND (r.expires_at IS NULL OR r.expires_at > now())
+    AND (
+      (v_code <> '' AND upper(COALESCE(r.subscription_code, '')) = v_code)
+      OR (v_digits <> '' AND regexp_replace(r.client_phone, '\D', '', 'g') = v_digits)
+    )
+  ORDER BY r.created_at DESC
+  LIMIT 1;
+
+  SELECT COUNT(*)
+  INTO v_active_ads
+  FROM public.elanati_ads a
+  WHERE a.status IN ('approved', 'pending')
+    AND (a.expires_at IS NULL OR a.expires_at > now())
+    AND (
+      (v_sub.subscription_code IS NOT NULL AND upper(COALESCE(a.subscription_code, '')) = upper(v_sub.subscription_code))
+      OR (v_digits <> '' AND regexp_replace(a.contact, '\D', '', 'g') = v_digits)
+    );
+
+  IF v_sub.id IS NOT NULL THEN
+    RETURN jsonb_build_object(
+      'allowed', v_active_ads < v_sub.max_ads,
+      'package_name', v_sub.package_name,
+      'subscription_code', v_sub.subscription_code,
+      'max_ads', v_sub.max_ads,
+      'used_ads', v_active_ads,
+      'duration_days', CASE WHEN v_sub.package_name = 'المؤسسي' THEN NULL ELSE v_pro_days END,
+      'is_permanent', v_sub.package_name = 'المؤسسي',
+      'featured', true,
+      'priority_rank', CASE WHEN v_sub.package_name = 'المؤسسي' THEN 2 ELSE 1 END,
+      'allow_extra_images', true,
+      'allow_banner', v_sub.package_name = 'المؤسسي'
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'allowed', v_active_ads < 1,
+    'package_name', 'مجاني',
+    'subscription_code', NULL,
+    'max_ads', 1,
+    'used_ads', v_active_ads,
+    'duration_days', v_free_days,
+    'is_permanent', false,
+    'featured', false,
+    'priority_rank', 0,
+    'allow_extra_images', false,
+    'allow_banner', false
+  );
+END;
+$$;
+
 -- ============================================================================
 -- البيانات الأولية (Seed Data)
 -- ============================================================================
-
--- تسجيل البريد الإلكتروني الرسمي للمالك كمدير افتراضي
 INSERT INTO public.elanati_admins (email, full_name, role)
 VALUES ('employeedaywork@gmail.com', 'مدير منصة إعلاناتي', 'super_admin')
 ON CONFLICT (email) DO NOTHING;
 
--- إعدادات الموقع الافتراضية
 INSERT INTO public.elanati_site_settings (
   id, site_name, contact_email, contact_phone, whatsapp_number,
-  location_text, stat_advertisers, stat_visits, stat_traders, stat_satisfaction, require_ad_approval
+  location_text, stat_advertisers, stat_visits, stat_traders, stat_satisfaction,
+  require_ad_approval, free_ad_days, pro_ad_days, vodafone_cash_number, instapay_handle,
+  bank_account_info, payment_instructions
 )
 VALUES (
   1, 'إعلاناتي', 'employeedaywork@gmail.com', '01007008707', '201007008707',
-  'جمهورية مصر العربية', 5000, 12000, 3500, 98, true
+  'جمهورية مصر العربية', 5000, 12000, 3500, 98,
+  true, 7, 30, '01007008707', '01007008707',
+  'تحويل بنكي أو إنستاباي على رقم 01007008707',
+  'يرجى التحويل بالجنيه المصري ثم كتابة رقم المحفظة أو رقم مرجع العملية لتأكيد الاشتراك فوراً.'
 )
 ON CONFLICT (id) DO NOTHING;
 
--- الباقات الافتراضية
 INSERT INTO public.elanati_packages (slug, name, monthly_price, annual_price, description, features, popular, cta_label, sort_order)
 VALUES
   ('free', 'مجاني', 0, 0, 'مثالي للبدء والتجربة',
@@ -376,21 +598,24 @@ VALUES
    false, 'تواصل معنا', 3)
 ON CONFLICT (slug) DO NOTHING;
 
--- الإعلانات الافتراضية (تُضاف فقط إذا كان الجدول فارغاً)
-INSERT INTO public.elanati_ads (title, category, description, contact, whatsapp, city, image, status, featured, views_count)
-SELECT v.title, v.category, v.description, v.contact, v.whatsapp, v.city, v.image, v.status, v.featured, v.views_count
+INSERT INTO public.elanati_ads (
+  title, category, description, contact, whatsapp, city, image, package_name,
+  status, featured, priority_rank, views_count, starts_at, expires_at
+)
+SELECT
+  v.title, v.category, v.description, v.contact, v.whatsapp, v.city, v.image, v.package_name,
+  v.status, v.featured, v.priority_rank, v.views_count, now(), v.expires_at
 FROM (
   VALUES
-    ('توزيع مواد غذائية بالجملة', 'توزيع', 'نوفر جميع المواد الغذائية بالجملة بأسعار تنافسية مع خدمة توصيل لجميع المحافظات', '01007008707', '201007008707', 'القاهرة', '📦', 'approved', true, 148),
-    ('عروض خاصة على الأجهزة الإلكترونية', 'تجارة', 'خصومات تصل إلى 40% على جميع الأجهزة الإلكترونية - عرض محدود للتجار والموزعين', '01012345678', '201012345678', 'الإسكندرية', '💻', 'approved', true, 112),
-    ('محل ملابس رجالي - تشكيلة جديدة', 'محلات', 'وصلتنا تشكيلة جديدة من الملابس الرجالية العصرية بأسعار مناسبة للتجار والأفراد', '01098765432', '201098765432', 'الدقهلية', '👔', 'approved', false, 64),
-    ('وكالة توزيع مستحضرات تجميل', 'توزيع', 'وكالة حصرية لتوزيع مستحضرات التجميل العالمية - أسعار خاصة للتجار وأصحاب الصيدليات', '01155566778', '201155566778', 'الجيزة', '💄', 'approved', false, 89),
-    ('معرض أثاث ومفروشات', 'محلات', 'أحدث تصاميم الأثاث والمفروشات المنزلية والمكتبية بأسعار الجملة وتسهيلات في السداد', '01234567890', '201234567890', 'الغربية', '🪑', 'approved', true, 131),
-    ('توزيع مواد بناء', 'توزيع', 'جميع مواد البناء والتشييد بأسعار الجملة مع التوصيل المباشر للمواقع والمشاريع', '01556789012', '201556789012', 'المنيا', '🏗️', 'approved', false, 73)
-) AS v(title, category, description, contact, whatsapp, city, image, status, featured, views_count)
+    ('توزيع مواد غذائية بالجملة', 'توزيع', 'نوفر جميع المواد الغذائية بالجملة بأسعار تنافسية مع خدمة توصيل لجميع المحافظات', '01007008707', '201007008707', 'القاهرة', '📦', 'المؤسسي', 'approved', true, 2, 148, NULL::timestamptz),
+    ('عروض خاصة على الأجهزة الإلكترونية', 'تجارة', 'خصومات تصل إلى 40% على جميع الأجهزة الإلكترونية - عرض محدود للتجار والموزعين', '01012345678', '201012345678', 'الإسكندرية', '💻', 'الاحترافي', 'approved', true, 1, 112, now() + interval '30 days'),
+    ('محل ملابس رجالي - تشكيلة جديدة', 'محلات', 'وصلتنا تشكيلة جديدة من الملابس الرجالية العصرية بأسعار مناسبة للتجار والأفراد', '01098765432', '201098765432', 'الدقهلية', '👔', 'مجاني', 'approved', false, 0, 64, now() + interval '7 days'),
+    ('وكالة توزيع مستحضرات تجميل', 'توزيع', 'وكالة حصرية لتوزيع مستحضرات التجميل العالمية - أسعار خاصة للتجار وأصحاب الصيدليات', '01155566778', '201155566778', 'الجيزة', '💄', 'مجاني', 'approved', false, 0, 89, now() + interval '7 days'),
+    ('معرض أثاث ومفروشات', 'محلات', 'أحدث تصاميم الأثاث والمفروشات المنزلية والمكتبية بأسعار الجملة وتسهيلات في السداد', '01234567890', '201234567890', 'الغربية', '🪑', 'الاحترافي', 'approved', true, 1, 131, now() + interval '30 days'),
+    ('توزيع مواد بناء', 'توزيع', 'جميع مواد البناء والتشييد بأسعار الجملة مع التوصيل المباشر للمواقع والمشاريع', '01556789012', '201556789012', 'المنيا', '🏗️', 'مجاني', 'approved', false, 0, 73, now() + interval '7 days')
+) AS v(title, category, description, contact, whatsapp, city, image, package_name, status, featured, priority_rank, views_count, expires_at)
 WHERE NOT EXISTS (SELECT 1 FROM public.elanati_ads);
 
--- آراء العملاء الافتراضية
 INSERT INTO public.elanati_testimonials (name, role, city, text, rating, avatar, is_visible)
 SELECT v.name, v.role, v.city, v.text, v.rating, v.avatar, v.is_visible
 FROM (
@@ -400,3 +625,40 @@ FROM (
     ('محمد علي', 'مدير مبيعات', 'الدقهلية', 'أفضل منصة إعلانية مخصصة للتجار والموزعين في مصر. الدعم الفني ممتاز والأسعار معقولة جداً.', 5, '👨‍💻', true)
 ) AS v(name, role, city, text, rating, avatar, is_visible)
 WHERE NOT EXISTS (SELECT 1 FROM public.elanati_testimonials);
+
+-- ============================================================================
+-- صلاحيات الوصول والتحديث اللحظي
+-- ============================================================================
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_ads TO anon, authenticated;
+GRANT INSERT ON public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests TO anon, authenticated;
+GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings TO authenticated;
+
+GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_messages(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO anon, authenticated;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_ads;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_contact_messages;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_support_messages;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_package_requests;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+  END IF;
+END $$;

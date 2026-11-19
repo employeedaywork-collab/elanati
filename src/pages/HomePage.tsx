@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import AddAdForm from '../components/AddAdForm';
 import AdDetailsModal from '../components/AdDetailsModal';
 import Advertisements from '../components/Advertisements';
+import ClientSubscriptionModal from '../components/ClientSubscriptionModal';
 import Contact from '../components/Contact';
 import Features from '../components/Features';
 import Footer from '../components/Footer';
@@ -43,6 +44,9 @@ export default function HomePage() {
     cycle: 'monthly' | 'annual';
   } | null>(null);
 
+  const [portalOpen, setPortalOpen] = useState(false);
+  const [portalQuery, setPortalQuery] = useState('');
+
   const [supportOpen, setSupportOpen] = useState(false);
   const [supportInitialTab, setSupportInitialTab] = useState<'new' | 'track' | 'direct'>('new');
   const [supportPrefillSubject, setSupportPrefillSubject] = useState('');
@@ -74,6 +78,16 @@ export default function HomePage() {
     setShowAddAd(true);
   };
 
+  const handleOpenPortal = (initialQ = '') => {
+    setPortalQuery(initialQ);
+    setPortalOpen(true);
+  };
+
+  const scrollToPackages = () => {
+    const el = document.getElementById('packages');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
   const handleCreateAd = async (input: {
     title: string;
     category: AdCategory;
@@ -82,6 +96,9 @@ export default function HomePage() {
     city: string;
     image: string;
     image_url?: string;
+    extra_images?: string[];
+    banner_url?: string;
+    subscription_code?: string;
   }): Promise<{ requiresReview: boolean }> => {
     const result = await createAd({
       ...input,
@@ -125,7 +142,11 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-white text-slate-900">
-      <Navbar siteName={settings.site_name} onAddAd={handleOpenAddAd} />
+      <Navbar
+        siteName={settings.site_name}
+        onAddAd={handleOpenAddAd}
+        onOpenPortal={() => handleOpenPortal()}
+      />
 
       <main>
         <Hero onAddAd={handleOpenAddAd} onSelectCategory={setSelectedCategory} />
@@ -148,13 +169,16 @@ export default function HomePage() {
         settings={settings}
         onAddAd={handleOpenAddAd}
         onSelectCategory={setSelectedCategory}
+        onOpenPortal={() => handleOpenPortal()}
       />
 
       {showAddAd && (
         <AddAdForm
-          requireApproval={settings.require_ad_approval}
+          settings={settings}
           onSubmit={handleCreateAd}
           onClose={() => setShowAddAd(false)}
+          onUpgrade={scrollToPackages}
+          onOpenPortal={(q) => handleOpenPortal(q)}
         />
       )}
 
@@ -170,8 +194,19 @@ export default function HomePage() {
         <PackageRequestModal
           pkg={selectedPackage.pkg}
           cycle={selectedPackage.cycle}
-          adminWhatsApp={settings.whatsapp_number}
+          settings={settings}
           onClose={() => setSelectedPackage(null)}
+          onOpenPortal={(subCode) => handleOpenPortal(subCode)}
+        />
+      )}
+
+      {portalOpen && (
+        <ClientSubscriptionModal
+          settings={settings}
+          initialQuery={portalQuery}
+          onClose={() => setPortalOpen(false)}
+          onAddAd={handleOpenAddAd}
+          onUpgrade={scrollToPackages}
         />
       )}
 

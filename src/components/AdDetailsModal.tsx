@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Check, Copy, Eye, MapPin, MessageCircle, Phone, Send, Star, X } from 'lucide-react';
+import { Calendar, Check, Clock, Copy, Crown, Eye, MapPin, MessageCircle, Phone, Send, Star, X } from 'lucide-react';
 import { formatWhatsAppLink } from '../lib/supabase';
+import { getRemainingDays } from '../services/dataService';
 import { Ad } from '../types';
 
 interface AdDetailsModalProps {
@@ -11,6 +12,12 @@ interface AdDetailsModalProps {
 
 export default function AdDetailsModal({ ad, onClose, onInquireAdmin }: AdDetailsModalProps) {
   const [copied, setCopied] = useState(false);
+
+  const galleryImages = [ad.image_url, ad.banner_url, ...(ad.extra_images || [])].filter(
+    (url, index, arr): url is string => Boolean(url) && arr.indexOf(url) === index
+  );
+  const [activeImgIndex, setActiveImgIndex] = useState(0);
+  const remainingDays = getRemainingDays(ad.expires_at);
 
   const handleCopyPhone = async () => {
     try {
@@ -32,7 +39,7 @@ export default function AdDetailsModal({ ad, onClose, onInquireAdmin }: AdDetail
       <div className="absolute inset-0 bg-slate-950/65 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
         <div className="sticky top-0 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-4 z-10">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 tabular-nums">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500 tabular-nums">
             <span className="text-blue-700 font-bold">{ad.category}</span>
             <span aria-hidden="true">·</span>
             <span>{ad.city}</span>
@@ -53,14 +60,37 @@ export default function AdDetailsModal({ ad, onClose, onInquireAdmin }: AdDetail
         </div>
 
         <div className="p-6 sm:p-8 space-y-6">
-          {ad.image_url && (
-            <div className="h-56 sm:h-64 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200">
-              <img
-                src={ad.image_url}
-                alt={ad.title}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-              />
+          {galleryImages.length > 0 && (
+            <div className="space-y-2.5">
+              <div className="h-56 sm:h-64 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200">
+                <img
+                  src={galleryImages[activeImgIndex]}
+                  alt={ad.title}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              {galleryImages.length > 1 && (
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {galleryImages.map((imgUrl, idx) => (
+                    <button
+                      key={imgUrl}
+                      type="button"
+                      onClick={() => setActiveImgIndex(idx)}
+                      className={`w-16 h-14 rounded-xl overflow-hidden border-2 shrink-0 transition-all ${
+                        activeImgIndex === idx ? 'border-blue-600 scale-105' : 'border-slate-200 opacity-75 hover:opacity-100'
+                      }`}
+                    >
+                      <img
+                        src={imgUrl}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -69,17 +99,49 @@ export default function AdDetailsModal({ ad, onClose, onInquireAdmin }: AdDetail
               {ad.image}
             </span>
             <div>
-              {ad.featured && (
-                <div className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 mb-1">
-                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                  إعلان مميز
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                {(ad.package_name === 'المؤسسي' || ad.priority_rank === 2) && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">
+                    <Crown className="w-3.5 h-3.5" />
+                    الباقة المؤسسية
+                  </span>
+                )}
+                {ad.featured && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700">
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                    إعلان مميز
+                  </span>
+                )}
+              </div>
               <h2 className="text-2xl font-extrabold text-slate-900 leading-snug">{ad.title}</h2>
               <p className="text-sm text-slate-500 mt-1 flex items-center gap-1.5 tabular-nums">
                 <MapPin className="w-4 h-4 text-slate-400" />
-                {ad.city} · نُشر في {ad.created_at.split('T')[0]}
+                {ad.city} · نُشر في {(ad.starts_at || ad.created_at).split('T')[0]}
               </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+              <Calendar className="w-4 h-4 text-blue-700 shrink-0" />
+              <div className="tabular-nums">
+                <p className="text-slate-500">تاريخ النشر والانتهاء</p>
+                <p className="font-bold text-slate-900">
+                  {(ad.starts_at || ad.created_at).split('T')[0]} ←{' '}
+                  {ad.expires_at ? ad.expires_at.split('T')[0] : 'ظهور دائم'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+              <div className="tabular-nums">
+                <p className="text-slate-500">المدة المتبقية للعرض</p>
+                <p className="font-bold text-slate-900">
+                  {remainingDays === null
+                    ? 'إعلان دائم بدون انتهاء'
+                    : `متبقي ${remainingDays} ${remainingDays === 1 ? 'يوم' : 'أيام'}`}
+                </p>
+              </div>
             </div>
           </div>
 

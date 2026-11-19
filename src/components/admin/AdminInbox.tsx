@@ -182,13 +182,20 @@ export default function AdminInbox({
               >
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <span className="font-extrabold text-sm text-slate-900 truncate">{t.name}</span>
-                  <span
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
-                      STATUS_META[t.status]?.cls || 'bg-slate-100'
-                    }`}
-                  >
-                    {STATUS_META[t.status]?.label || t.status}
-                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {t.priority && (
+                      <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                        أولوية
+                      </span>
+                    )}
+                    <span
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                        STATUS_META[t.status]?.cls || 'bg-slate-100'
+                      }`}
+                    >
+                      {STATUS_META[t.status]?.label || t.status}
+                    </span>
+                  </div>
                 </div>
                 <p className="text-xs font-bold text-blue-700 tabular-nums mb-1">
                   {t.ticket_code} · {t.subject}
@@ -205,10 +212,15 @@ export default function AdminInbox({
           <>
             <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2 text-xs font-bold text-blue-700 tabular-nums mb-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-blue-700 tabular-nums mb-1">
                   <span>{selectedTicket.ticket_code}</span>
                   <span>·</span>
                   <span>{selectedTicket.subject}</span>
+                  {selectedTicket.priority && (
+                    <span className="text-[11px] font-extrabold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+                      عميل مميز · أولوية
+                    </span>
+                  )}
                 </div>
                 <h3 className="text-lg font-extrabold text-slate-900">{selectedTicket.name}</h3>
                 <p className="text-xs text-slate-500 mt-0.5 tabular-nums">

@@ -43,6 +43,9 @@ export default function Packages({ packages, onSelectPackage }: PackagesProps) {
               اشتراك سنوي (وفر 20%)
             </button>
           </div>
+          <p className="text-xs font-semibold text-slate-500 mt-3">
+            السداد بالجنيه المصري عبر فودافون كاش · إنستاباي (InstaPay) · التحويل البنكي
+          </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
@@ -79,6 +82,15 @@ export default function Packages({ packages, onSelectPackage }: PackagesProps) {
                     >
                       جنيه مصري · {periodLabel}
                     </span>
+                    {isAnnual && price > 0 && (
+                      <p
+                        className={`text-xs font-bold mt-2 tabular-nums ${
+                          pkg.popular ? 'text-amber-300' : 'text-blue-700'
+                        }`}
+                      >
+                        الإجمالي السنوي: {(price * 12).toLocaleString('en-US')} جنيه مصري / سنة
+                      </p>
+                    )}
                   </div>
 
                   <ul className="space-y-3 mb-8">

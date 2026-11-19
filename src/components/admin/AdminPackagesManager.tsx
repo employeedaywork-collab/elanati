@@ -1,7 +1,12 @@
 import { useState } from 'react';
-import { MessageCircle, Save } from 'lucide-react';
+import { CheckCircle2, MessageCircle, Save } from 'lucide-react';
 import { formatWhatsAppLink } from '../../lib/supabase';
-import { updatePackageAdmin, updatePackageRequestAdmin } from '../../services/dataService';
+import {
+  activateSubscriptionAdmin,
+  getRemainingDays,
+  updatePackageAdmin,
+  updatePackageRequestAdmin,
+} from '../../services/dataService';
 import { PackagePlan, PackageRequest, PackageRequestStatus } from '../../types';
 
 interface AdminPackagesManagerProps {
@@ -11,10 +16,16 @@ interface AdminPackagesManagerProps {
 }
 
 const REQ_STATUS: Record<PackageRequestStatus, { label: string; cls: string }> = {
-  pending: { label: 'طلب جديد', cls: 'bg-amber-50 text-amber-800 border border-amber-200' },
+  pending: { label: 'بانتظار التأكيد', cls: 'bg-amber-50 text-amber-800 border border-amber-200' },
   contacted: { label: 'تم التواصل', cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
-  activated: { label: 'تم التفعيل', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
+  activated: { label: 'نشط ومفعّل', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
   cancelled: { label: 'ملغي', cls: 'bg-slate-100 text-slate-600 border border-slate-200' },
+};
+
+const PAYMENT_LABEL: Record<string, string> = {
+  vodafone_cash: 'فودافون كاش',
+  instapay: 'إنستاباي',
+  bank_transfer: 'تحويل بنكي',
 };
 
 export default function AdminPackagesManager({
@@ -24,10 +35,30 @@ export default function AdminPackagesManager({
 }: AdminPackagesManagerProps) {
   const [editingPlans, setEditingPlans] = useState<Record<string, PackagePlan>>({});
   const [savingPlanId, setSavingPlanId] = useState<string | null>(null);
+  const [busyReqId, setBusyReqId] = useState<string | null>(null);
 
-  const handleRequestStatus = async (id: string, status: PackageRequestStatus) => {
-    await updatePackageRequestAdmin(id, { status });
-    await onRefresh();
+  const handleRequestStatus = async (req: PackageRequest, status: PackageRequestStatus) => {
+    setBusyReqId(req.id);
+    try {
+      if (status === 'activated') {
+        await activateSubscriptionAdmin(req);
+      } else {
+        await updatePackageRequestAdmin(req.id, { status });
+      }
+      await onRefresh();
+    } finally {
+      setBusyReqId(null);
+    }
+  };
+
+  const handleActivateNow = async (req: PackageRequest) => {
+    setBusyReqId(req.id);
+    try {
+      await activateSubscriptionAdmin(req);
+      await onRefresh();
+    } finally {
+      setBusyReqId(null);
+    }
   };
 
   const getPlanDraft = (pkg: PackagePlan) => editingPlans[pkg.id] || pkg;
@@ -63,10 +94,10 @@ export default function AdminPackagesManager({
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100">
           <h2 className="font-extrabold text-slate-900 text-base">
-            طلبات الاشتراك في الباقات ({requests.length})
+            طلبات الاشتراك والسداد بالجنيه المصري ({requests.length})
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            تواصل مع التجار لتفعيل باقاتهم عبر الهاتف أو واتساب وحدّث حالة الطلب
+            راجع مرجع الدفع وفعّل اشتراك العميل بضغطة واحدة ليبدأ تاريخ البداية والنهاية والعدّاد التنازلي تلقائياً
           </p>
         </div>
 
@@ -79,68 +110,106 @@ export default function AdminPackagesManager({
             <table className="w-full text-right text-sm">
               <thead className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
                 <tr>
-                  <th className="py-3.5 px-4">العميل</th>
-                  <th className="py-3.5 px-4">الباقة</th>
-                  <th className="py-3.5 px-4">الهاتف / الشركة</th>
+                  <th className="py-3.5 px-4">العميل / الكود</th>
+                  <th className="py-3.5 px-4">الباقة والسداد</th>
+                  <th className="py-3.5 px-4">مدة الاشتراك</th>
                   <th className="py-3.5 px-4">الحالة</th>
-                  <th className="py-3.5 px-4">تواصل</th>
+                  <th className="py-3.5 px-4">إجراء سريع</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {requests.map((req) => (
-                  <tr key={req.id} className="hover:bg-slate-50/70">
-                    <td className="py-3.5 px-4">
-                      <p className="font-bold text-slate-900">{req.client_name}</p>
-                      <p className="text-xs text-slate-500 tabular-nums">
-                        {req.created_at.split('T')[0]}
-                      </p>
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <p className="font-bold text-blue-700">{req.package_name}</p>
-                      <p className="text-xs text-slate-500 tabular-nums">
-                        {req.price_egp} ج.م · {req.billing_cycle === 'annual' ? 'سنوي' : 'شهري'}
-                      </p>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <p className="text-xs font-bold text-slate-800 tabular-nums">
-                        {req.client_phone}
-                      </p>
-                      {req.company_name && (
-                        <p className="text-xs text-slate-500">{req.company_name}</p>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <select
-                        value={req.status}
-                        onChange={(e) =>
-                          void handleRequestStatus(req.id, e.target.value as PackageRequestStatus)
-                        }
-                        className={`text-xs font-bold px-2.5 py-1.5 rounded-lg outline-none ${
-                          REQ_STATUS[req.status]?.cls || 'bg-slate-100'
-                        }`}
-                      >
-                        <option value="pending">طلب جديد</option>
-                        <option value="contacted">تم التواصل</option>
-                        <option value="activated">تم التفعيل</option>
-                        <option value="cancelled">ملغي</option>
-                      </select>
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <a
-                        href={formatWhatsAppLink(
-                          req.client_phone,
-                          `مرحباً ${req.client_name}، نتواصل معك من إدارة منصة إعلاناتي بخصوص طلب الاشتراك في باقة ${req.package_name}`
+                {requests.map((req) => {
+                  const remDays = getRemainingDays(req.expires_at);
+                  return (
+                    <tr key={req.id} className="hover:bg-slate-50/70">
+                      <td className="py-3.5 px-4">
+                        <p className="font-bold text-slate-900">{req.client_name}</p>
+                        <p className="text-xs font-bold text-slate-700 tabular-nums">
+                          {req.client_phone}
+                          {req.subscription_code ? ` · ${req.subscription_code}` : ''}
+                        </p>
+                        {req.company_name && (
+                          <p className="text-xs text-slate-500">{req.company_name}</p>
                         )}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" />
-                        واتساب
-                      </a>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-xs">
+                        <p className="font-bold text-blue-700">
+                          {req.package_name} ({req.billing_cycle === 'annual' ? 'سنوي' : 'شهري'})
+                        </p>
+                        <p className="font-bold text-slate-900 tabular-nums mt-0.5">
+                          {req.price_egp} ج.م · {PAYMENT_LABEL[req.payment_method] || req.payment_method}
+                        </p>
+                        {req.payment_reference && (
+                          <p className="text-[11px] text-slate-500 tabular-nums">
+                            مرجع الدفع: {req.payment_reference}
+                          </p>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-xs tabular-nums">
+                        {req.starts_at && req.expires_at ? (
+                          <div>
+                            <p className="text-slate-700 font-semibold">
+                              من {req.starts_at.split('T')[0]} ← {req.expires_at.split('T')[0]}
+                            </p>
+                            <p
+                              className={`text-[11px] font-bold mt-0.5 ${
+                                remDays === 0 ? 'text-red-600' : 'text-emerald-700'
+                              }`}
+                            >
+                              {remDays === 0 ? 'منتهي' : `متبقي ${remDays} يوم`}
+                            </p>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">لم يبدأ بعد</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <select
+                          disabled={busyReqId === req.id}
+                          value={req.status}
+                          onChange={(e) =>
+                            void handleRequestStatus(req, e.target.value as PackageRequestStatus)
+                          }
+                          className={`text-xs font-bold px-2.5 py-1.5 rounded-lg outline-none ${
+                            REQ_STATUS[req.status]?.cls || 'bg-slate-100'
+                          }`}
+                        >
+                          <option value="pending">بانتظار التأكيد</option>
+                          <option value="contacted">تم التواصل</option>
+                          <option value="activated">نشط ومفعّل</option>
+                          <option value="cancelled">ملغي</option>
+                        </select>
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          {req.status !== 'activated' && (
+                            <button
+                              type="button"
+                              disabled={busyReqId === req.id}
+                              onClick={() => void handleActivateNow(req)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              تفعيل الاشتراك
+                            </button>
+                          )}
+                          <a
+                            href={formatWhatsAppLink(
+                              req.client_phone,
+                              `مرحباً ${req.client_name}، نتواصل معك من إدارة منصة إعلاناتي بخصوص اشتراكك رقم ${req.subscription_code || ''} في باقة ${req.package_name}`
+                            )}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            واتساب
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

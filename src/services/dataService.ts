@@ -7,13 +7,16 @@ import {
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   Ad,
+  AdAllowance,
   AdCategory,
   AdStatus,
   AdminSession,
+  ClientPortalData,
   ContactMessage,
   PackagePlan,
   PackageRequest,
   PackageRequestStatus,
+  PaymentMethod,
   SiteSettings,
   SupportMessage,
   Testimonial,
@@ -61,12 +64,45 @@ export function generateTicketCode(): string {
   return `ELN-${num}`;
 }
 
+export function generateSubscriptionCode(): string {
+  const num = Math.floor(10000 + Math.random() * 90000);
+  return `SUB-${num}`;
+}
+
+export function normalizeDigits(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
 function normalizePhoneToWhatsApp(phone: string): string {
-  const digits = phone.replace(/\D/g, '');
+  const digits = normalizeDigits(phone);
   if (digits.startsWith('01') && digits.length === 11) {
     return `2${digits}`;
   }
   return digits;
+}
+
+export function isAdExpired(ad: Pick<Ad, 'expires_at'>): boolean {
+  if (!ad.expires_at) return false;
+  return new Date(ad.expires_at).getTime() <= Date.now();
+}
+
+export function getRemainingDays(expiresAt?: string | null): number | null {
+  if (!expiresAt) return null;
+  const diff = new Date(expiresAt).getTime() - Date.now();
+  if (diff <= 0) return 0;
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+function addDaysIso(from: Date, days: number): string {
+  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function normalizeAdRow(row: any): Ad {
+  return {
+    ...row,
+    extra_images: Array.isArray(row.extra_images) ? row.extra_images : [],
+    priority_rank: typeof row.priority_rank === 'number' ? row.priority_rank : 0,
+  } as Ad;
 }
 
 // ============================================================================
@@ -80,10 +116,16 @@ export async function fetchSiteSettings(): Promise<SiteSettings> {
       .eq('id', 1)
       .maybeSingle();
     if (!error && data) {
-      return data as SiteSettings;
+      return {
+        ...DEFAULT_SITE_SETTINGS,
+        ...(data as Partial<SiteSettings>),
+      };
     }
   }
-  return readLocal<SiteSettings>(STORAGE_KEYS.settings, DEFAULT_SITE_SETTINGS);
+  return {
+    ...DEFAULT_SITE_SETTINGS,
+    ...readLocal<Partial<SiteSettings>>(STORAGE_KEYS.settings, DEFAULT_SITE_SETTINGS),
+  };
 }
 
 export async function updateSiteSettings(patch: Partial<SiteSettings>): Promise<SiteSettings> {
@@ -102,7 +144,7 @@ export async function updateSiteSettings(patch: Partial<SiteSettings>): Promise<
       .select()
       .single();
     if (error) throw new Error(error.message);
-    return data as SiteSettings;
+    return { ...DEFAULT_SITE_SETTINGS, ...(data as Partial<SiteSettings>) };
   }
 
   writeLocal(STORAGE_KEYS.settings, updated);
@@ -110,24 +152,159 @@ export async function updateSiteSettings(patch: Partial<SiteSettings>): Promise<
 }
 
 // ============================================================================
+// Client Allowance & Subscription Portal
+// ============================================================================
+export async function checkAdAllowance(
+  contact: string,
+  subscriptionCode?: string
+): Promise<AdAllowance> {
+  const settings = await fetchSiteSettings();
+  const freeDays = Math.max(1, settings.free_ad_days || 7);
+  const proDays = Math.max(1, settings.pro_ad_days || 30);
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc('check_elanati_ad_allowance', {
+      p_contact: contact,
+      p_subscription_code: subscriptionCode || null,
+    });
+    if (!error && data) {
+      return data as AdAllowance;
+    }
+  }
+
+  const digits = normalizeDigits(contact);
+  const cleanCode = (subscriptionCode || '').trim().toUpperCase();
+  const requests = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
+  const activeSub = requests.find(
+    (r) =>
+      r.status === 'activated' &&
+      (!r.expires_at || new Date(r.expires_at).getTime() > Date.now()) &&
+      ((cleanCode && (r.subscription_code || '').toUpperCase() === cleanCode) ||
+        (digits && normalizeDigits(r.client_phone) === digits))
+  );
+
+  const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  const activeClientAds = ads.filter(
+    (a) =>
+      (a.status === 'approved' || a.status === 'pending') &&
+      !isAdExpired(a) &&
+      ((activeSub?.subscription_code &&
+        (a.subscription_code || '').toUpperCase() === activeSub.subscription_code.toUpperCase()) ||
+        (digits && normalizeDigits(a.contact) === digits))
+  );
+
+  if (activeSub) {
+    const maxAds = activeSub.max_ads || (activeSub.package_name === 'المؤسسي' ? 999999 : 10);
+    const isEnterprise = activeSub.package_name === 'المؤسسي';
+    return {
+      allowed: activeClientAds.length < maxAds,
+      package_name: activeSub.package_name,
+      subscription_code: activeSub.subscription_code,
+      max_ads: maxAds,
+      used_ads: activeClientAds.length,
+      duration_days: isEnterprise ? null : proDays,
+      is_permanent: isEnterprise,
+      featured: true,
+      priority_rank: isEnterprise ? 2 : 1,
+      allow_extra_images: true,
+      allow_banner: isEnterprise,
+    };
+  }
+
+  return {
+    allowed: activeClientAds.length < 1,
+    package_name: 'مجاني',
+    subscription_code: null,
+    max_ads: 1,
+    used_ads: activeClientAds.length,
+    duration_days: freeDays,
+    is_permanent: false,
+    featured: false,
+    priority_rank: 0,
+    allow_extra_images: false,
+    allow_banner: false,
+  };
+}
+
+export async function fetchClientPortal(query: string): Promise<ClientPortalData> {
+  const clean = query.trim();
+  if (!clean) return { subscription: null, ads: [] };
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc('get_elanati_client_portal', {
+      p_query: clean,
+    });
+    if (!error && data) {
+      const payload = data as { subscription: PackageRequest | null; ads: any[] };
+      return {
+        subscription: payload.subscription || null,
+        ads: Array.isArray(payload.ads) ? payload.ads.map(normalizeAdRow) : [],
+      };
+    }
+  }
+
+  const digits = normalizeDigits(clean);
+  const upper = clean.toUpperCase();
+  const requests = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
+  const matchingReqs = requests
+    .filter(
+      (r) =>
+        (r.subscription_code && r.subscription_code.toUpperCase() === upper) ||
+        (digits && normalizeDigits(r.client_phone) === digits)
+    )
+    .sort((a, b) => {
+      if (a.status === 'activated' && b.status !== 'activated') return -1;
+      if (b.status === 'activated' && a.status !== 'activated') return 1;
+      return b.created_at.localeCompare(a.created_at);
+    });
+
+  const subscription = matchingReqs[0] || null;
+  const phoneLookup = subscription ? normalizeDigits(subscription.client_phone) : digits;
+  const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  const clientAds = ads
+    .filter(
+      (a) =>
+        (subscription?.subscription_code &&
+          (a.subscription_code || '').toUpperCase() ===
+            subscription.subscription_code.toUpperCase()) ||
+        (phoneLookup && normalizeDigits(a.contact) === phoneLookup)
+    )
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  return { subscription, ads: clientAds };
+}
+
+// ============================================================================
 // Advertisements
 // ============================================================================
 export async function fetchPublicAds(): Promise<Ad[]> {
+  const nowIso = new Date().toISOString();
+
   if (supabase) {
     const { data, error } = await supabase
       .from('elanati_ads')
       .select('*')
       .eq('status', 'approved')
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+      .order('priority_rank', { ascending: false })
       .order('featured', { ascending: false })
       .order('created_at', { ascending: false });
     if (!error && data) {
-      return data as Ad[];
+      return data.map(normalizeAdRow).filter((ad) => !isAdExpired(ad));
     }
   }
+
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   return all
-    .filter((ad) => ad.status === 'approved')
-    .sort((a, b) => Number(b.featured) - Number(a.featured));
+    .map(normalizeAdRow)
+    .filter((ad) => ad.status === 'approved' && !isAdExpired(ad))
+    .sort((a, b) => {
+      const rankDiff = (b.priority_rank || 0) - (a.priority_rank || 0);
+      if (rankDiff !== 0) return rankDiff;
+      const featDiff = Number(b.featured) - Number(a.featured);
+      if (featDiff !== 0) return featDiff;
+      return b.created_at.localeCompare(a.created_at);
+    });
 }
 
 export async function fetchAllAdsAdmin(): Promise<Ad[]> {
@@ -137,9 +314,9 @@ export async function fetchAllAdsAdmin(): Promise<Ad[]> {
       .select('*')
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
-    return (data || []) as Ad[];
+    return (data || []).map(normalizeAdRow);
   }
-  return readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  return readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS).map(normalizeAdRow);
 }
 
 export interface CreateAdInput {
@@ -150,16 +327,78 @@ export interface CreateAdInput {
   city: string;
   image: string;
   image_url?: string;
+  extra_images?: string[];
+  banner_url?: string;
   package_name?: string;
+  subscription_code?: string;
+  duration_days?: number | null;
   requireApproval?: boolean;
   asAdmin?: boolean;
   featured?: boolean;
 }
 
 export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requiresReview: boolean }> {
-  const requiresReview = input.asAdmin ? false : (input.requireApproval ?? true);
+  const settings = await fetchSiteSettings();
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  let allowance: AdAllowance | null = null;
+  if (!input.asAdmin) {
+    allowance = await checkAdAllowance(input.contact, input.subscription_code);
+    if (!allowance.allowed) {
+      if (allowance.package_name === 'مجاني') {
+        throw new Error(
+          'الباقة المجانية تسمح بإعلان واحد فقط نشط لكل رقم هاتف. يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة المزيد من الإعلانات.'
+        );
+      }
+      throw new Error(
+        `لقد وصلت للحد الأقصى لإعلانات باقتك (${allowance.max_ads} إعلانات). يمكنك الترقية إلى الباقة المؤسسية لإعلانات غير محدودة.`
+      );
+    }
+  }
+
+  const effectivePackage = input.asAdmin
+    ? input.package_name || 'مجاني'
+    : allowance?.package_name || 'مجاني';
+
+  let expiresAt: string | null = null;
+  if (input.asAdmin) {
+    if (input.duration_days === null) {
+      expiresAt = null;
+    } else if (typeof input.duration_days === 'number' && input.duration_days > 0) {
+      expiresAt = addDaysIso(now, input.duration_days);
+    } else if (effectivePackage === 'مجاني') {
+      expiresAt = addDaysIso(now, settings.free_ad_days || 7);
+    } else if (effectivePackage === 'الاحترافي') {
+      expiresAt = addDaysIso(now, settings.pro_ad_days || 30);
+    } else {
+      expiresAt = null;
+    }
+  } else if (allowance) {
+    expiresAt =
+      allowance.is_permanent || allowance.duration_days === null
+        ? null
+        : addDaysIso(now, allowance.duration_days);
+  }
+
+  const isFeatured = input.asAdmin
+    ? Boolean(input.featured)
+    : Boolean(allowance?.featured);
+
+  const priorityRank = input.asAdmin
+    ? effectivePackage === 'المؤسسي'
+      ? 2
+      : effectivePackage === 'الاحترافي' || isFeatured
+      ? 1
+      : 0
+    : allowance?.priority_rank || 0;
+
+  const extraImages = (input.extra_images || []).map((u) => u.trim()).filter(Boolean).slice(0, 4);
+  const bannerUrl =
+    input.asAdmin || allowance?.allow_banner ? input.banner_url?.trim() || null : null;
+
+  const requiresReview = input.asAdmin ? false : (input.requireApproval ?? settings.require_ad_approval);
   const status: AdStatus = requiresReview ? 'pending' : 'approved';
-  const now = new Date().toISOString();
 
   const newAd: Ad = {
     id: generateId('ad'),
@@ -171,16 +410,21 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     city: input.city.trim(),
     image: input.image || '📦',
     image_url: input.image_url?.trim() || null,
-    package_name: input.package_name || 'مجاني',
+    extra_images: input.asAdmin || allowance?.allow_extra_images ? extraImages : [],
+    banner_url: bannerUrl,
+    package_name: effectivePackage,
+    subscription_code: allowance?.subscription_code || input.subscription_code || null,
+    priority_rank: priorityRank,
     status,
-    featured: Boolean(input.featured),
+    featured: isFeatured,
     views_count: 0,
-    created_at: now,
-    updated_at: now,
+    starts_at: nowIso,
+    expires_at: expiresAt,
+    created_at: nowIso,
+    updated_at: nowIso,
   };
 
   if (supabase) {
-    // Insert without .select() so public pending submissions don't trip SELECT RLS
     const { error } = await supabase.from('elanati_ads').insert({
       id: newAd.id,
       title: newAd.title,
@@ -191,10 +435,16 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
       city: newAd.city,
       image: newAd.image,
       image_url: newAd.image_url,
+      extra_images: newAd.extra_images,
+      banner_url: newAd.banner_url,
       package_name: newAd.package_name,
+      subscription_code: newAd.subscription_code,
+      priority_rank: newAd.priority_rank,
       status: newAd.status,
       featured: newAd.featured,
       views_count: 0,
+      starts_at: newAd.starts_at,
+      expires_at: newAd.expires_at,
     });
     if (error) throw new Error(error.message);
     return { ad: newAd, requiresReview };
@@ -219,14 +469,14 @@ export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad>
       .select()
       .single();
     if (error) throw new Error(error.message);
-    return data as Ad;
+    return normalizeAdRow(data);
   }
 
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   let target: Ad | undefined;
   const next = all.map((ad) => {
     if (ad.id === id) {
-      target = { ...ad, ...updatedPatch };
+      target = normalizeAdRow({ ...ad, ...updatedPatch });
       return target;
     }
     return ad;
@@ -277,6 +527,19 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
   const ticketCode = generateTicketCode();
   const now = new Date().toISOString();
 
+  // Check if client has active paid plan for priority support
+  let hasPriority = false;
+  if (input.phone) {
+    try {
+      const portal = await fetchClientPortal(input.phone);
+      if (portal.subscription?.status === 'activated') {
+        hasPriority = true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const ticket: ContactMessage = {
     id: generateId('msg'),
     ticket_code: ticketCode,
@@ -287,6 +550,7 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
     message: input.message.trim(),
     ad_id: input.ad_id || null,
     status: 'new',
+    priority: hasPriority,
     admin_reply: null,
     replied_at: null,
     created_at: now,
@@ -311,6 +575,7 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
       subject: ticket.subject,
       message: ticket.message,
       ad_id: ticket.ad_id,
+      priority: hasPriority,
       status: 'new',
     });
     if (msgErr) throw new Error(msgErr.message);
@@ -448,6 +713,7 @@ export async function fetchAllTicketsAdmin(): Promise<ContactMessage[]> {
     const { data, error } = await supabase
       .from('elanati_contact_messages')
       .select('*')
+      .order('priority', { ascending: false })
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
     return (data || []) as ContactMessage[];
@@ -488,29 +754,44 @@ export async function updateTicketStatusAdmin(id: string, status: TicketStatus):
 }
 
 // ============================================================================
-// Package Requests
+// Package Requests & Subscriptions
 // ============================================================================
 export async function createPackageRequest(input: {
   package_name: string;
   billing_cycle: 'monthly' | 'annual';
   price_egp: number;
+  payment_method: PaymentMethod;
+  payment_reference?: string;
   client_name: string;
   client_phone: string;
   client_email?: string;
   company_name?: string;
   notes?: string;
 }): Promise<PackageRequest> {
+  const isEnterprise = input.package_name === 'المؤسسي';
+  const maxAds = isEnterprise ? 999999 : 10;
+  const subscriptionCode = generateSubscriptionCode();
+
   const req: PackageRequest = {
     id: generateId('preq'),
+    subscription_code: subscriptionCode,
     package_name: input.package_name,
     billing_cycle: input.billing_cycle,
     price_egp: input.price_egp,
+    payment_method: input.payment_method,
+    payment_reference: input.payment_reference?.trim() || null,
     client_name: input.client_name.trim(),
     client_phone: input.client_phone.trim(),
     client_email: input.client_email?.trim() || null,
     company_name: input.company_name?.trim() || null,
     notes: input.notes?.trim() || null,
     status: 'pending',
+    max_ads: maxAds,
+    starts_at: null,
+    expires_at: null,
+    api_key: null,
+    account_manager_name: null,
+    account_manager_phone: null,
     admin_note: null,
     created_at: new Date().toISOString(),
   };
@@ -518,15 +799,19 @@ export async function createPackageRequest(input: {
   if (supabase) {
     const { error } = await supabase.from('elanati_package_requests').insert({
       id: req.id,
+      subscription_code: req.subscription_code,
       package_name: req.package_name,
       billing_cycle: req.billing_cycle,
       price_egp: req.price_egp,
+      payment_method: req.payment_method,
+      payment_reference: req.payment_reference,
       client_name: req.client_name,
       client_phone: req.client_phone,
       client_email: req.client_email,
       company_name: req.company_name,
       notes: req.notes,
       status: 'pending',
+      max_ads: req.max_ads,
     });
     if (error) throw new Error(error.message);
     return req;
@@ -551,7 +836,7 @@ export async function fetchPackageRequestsAdmin(): Promise<PackageRequest[]> {
 
 export async function updatePackageRequestAdmin(
   id: string,
-  patch: { status?: PackageRequestStatus; admin_note?: string }
+  patch: Partial<PackageRequest>
 ): Promise<void> {
   if (supabase) {
     const { error } = await supabase
@@ -565,6 +850,81 @@ export async function updatePackageRequestAdmin(
   writeLocal(
     STORAGE_KEYS.packageRequests,
     all.map((r) => (r.id === id ? { ...r, ...patch } : r))
+  );
+}
+
+export async function activateSubscriptionAdmin(
+  req: PackageRequest,
+  durationDays?: number
+): Promise<void> {
+  const settings = await fetchSiteSettings();
+  const now = new Date();
+  const days =
+    durationDays ?? (req.billing_cycle === 'annual' ? 365 : 30);
+  const startsAt = now.toISOString();
+  const expiresAt = addDaysIso(now, days);
+  const isEnterprise = req.package_name === 'المؤسسي';
+  const subCode = req.subscription_code || generateSubscriptionCode();
+  const apiKey =
+    req.api_key || (isEnterprise ? `ELN-API-${Math.random().toString(36).slice(2, 10).toUpperCase()}` : null);
+
+  const patch: Partial<PackageRequest> = {
+    subscription_code: subCode,
+    status: 'activated',
+    starts_at: startsAt,
+    expires_at: expiresAt,
+    max_ads: isEnterprise ? 999999 : 10,
+    api_key: apiKey,
+    account_manager_name: isEnterprise ? 'مدير حسابات الشركات - إعلاناتي' : null,
+    account_manager_phone: isEnterprise ? settings.contact_phone : null,
+  };
+
+  await updatePackageRequestAdmin(req.id, patch);
+
+  // Upgrade existing active/pending ads for the same phone number
+  const clientDigits = normalizeDigits(req.client_phone);
+  const adExpiresAt = isEnterprise ? null : addDaysIso(now, settings.pro_ad_days || 30);
+  const priorityRank = isEnterprise ? 2 : 1;
+
+  if (supabase) {
+    const allAds = await fetchAllAdsAdmin();
+    const matchingAds = allAds.filter(
+      (a) =>
+        a.status !== 'rejected' &&
+        (normalizeDigits(a.contact) === clientDigits ||
+          (a.subscription_code && a.subscription_code === subCode))
+    );
+    await Promise.all(
+      matchingAds.map((ad) =>
+        updateAdAdmin(ad.id, {
+          package_name: req.package_name,
+          subscription_code: subCode,
+          featured: true,
+          priority_rank: priorityRank,
+          expires_at: adExpiresAt,
+          status: ad.status === 'pending' ? 'approved' : ad.status,
+        })
+      )
+    );
+    return;
+  }
+
+  const allAds = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  writeLocal(
+    STORAGE_KEYS.ads,
+    allAds.map((ad) =>
+      ad.status !== 'rejected' && normalizeDigits(ad.contact) === clientDigits
+        ? {
+            ...ad,
+            package_name: req.package_name,
+            subscription_code: subCode,
+            featured: true,
+            priority_rank: priorityRank,
+            expires_at: adExpiresAt,
+            status: ad.status === 'pending' ? 'approved' : ad.status,
+          }
+        : ad
+    )
   );
 }
 
@@ -724,11 +1084,11 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
 
   if (!isSupabaseConfigured || !supabase) {
     if (!cleanEmail || password.length < 4) {
-      throw new Error('أدخل البريد الإلكتروني وكلمة مرور صالحة (4 أحرف على الأقل)');
+      throw new Error('أدخل البريد الإلكتروني وكلمة مرور صالحة');
     }
     const previewSession: AdminSession = {
       email: cleanEmail,
-      fullName: 'مدير منصة إعلاناتي (معاينة محلية)',
+      fullName: 'مدير المنصة',
       isPreviewMode: true,
     };
     writeLocal(STORAGE_KEYS.previewAdmin, previewSession);
@@ -744,7 +1104,7 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
       throw new Error('بيانات الدخول غير صحيحة');
     }
     if (error.message.toLowerCase().includes('email not confirmed')) {
-      throw new Error('البريد الإلكتروني غير مُؤكّد بعد — افتح رابط التأكيد في بريدك أو فعّل المستخدم من Supabase → Authentication → Users');
+      throw new Error('يرجى تأكيد البريد الإلكتروني أولاً قبل تسجيل الدخول');
     }
     throw new Error(error.message);
   }
@@ -760,7 +1120,7 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
 
   if (adminErr || !adminRow) {
     await supabase.auth.signOut();
-    throw new Error('هذا الحساب غير مسجل ضمن صلاحيات مديري منصة إعلاناتي في جدول elanati_admins');
+    throw new Error('هذا الحساب غير مسجل ضمن صلاحيات مديري المنصة');
   }
 
   return {
@@ -770,7 +1130,10 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
   };
 }
 
-export async function signUpFirstAdmin(email: string, password: string): Promise<{ needsEmailConfirmation: boolean; session: AdminSession | null }> {
+export async function signUpFirstAdmin(
+  email: string,
+  password: string
+): Promise<{ needsEmailConfirmation: boolean; session: AdminSession | null }> {
   const cleanEmail = email.trim().toLowerCase();
   if (!isSupabaseConfigured || !supabase) {
     const session = await signInAdmin(cleanEmail, password);
@@ -783,7 +1146,7 @@ export async function signUpFirstAdmin(email: string, password: string): Promise
   });
   if (error) {
     if (error.message.toLowerCase().includes('already registered')) {
-      throw new Error('هذا البريد مسجل بالفعل في هذا المشروع — اختر "تسجيل الدخول" وأدخل كلمة المرور الخاصة بك.');
+      throw new Error('هذا البريد مسجل بالفعل — استخدم خيار تسجيل الدخول بنفس كلمة المرور.');
     }
     throw new Error(error.message);
   }
@@ -795,7 +1158,7 @@ export async function signUpFirstAdmin(email: string, password: string): Promise
   const session = await getAdminSession();
   if (!session) {
     await supabase.auth.signOut();
-    throw new Error('تم إنشاء الحساب ولكن البريد غير مضاف في جدول elanati_admins. أضف البريد في Supabase أولاً.');
+    throw new Error('تم إنشاء الحساب ولكن البريد غير مدرج ضمن مديري المنصة.');
   }
   return { needsEmailConfirmation: false, session };
 }
@@ -806,115 +1169,3 @@ export async function signOutAdmin(): Promise<void> {
   }
   localStorage.removeItem(STORAGE_KEYS.previewAdmin);
 }
-
-export interface SupabaseDiagnosticReport {
-  configured: boolean;
-  projectHost: string;
-  keyLooksLikeSecret: boolean;
-  hasUrl: boolean;
-  hasKey: boolean;
-  tablesReachable: boolean;
-  adsCount: number | null;
-  packagesCount: number | null;
-  settingsFound: boolean;
-  errorCode?: string;
-  errorMessage?: string;
-  diagnosis: string;
-}
-
-export async function diagnoseSupabaseConnection(): Promise<SupabaseDiagnosticReport> {
-  const { supabaseConfigDiagnostics } = await import('../lib/supabase');
-
-  if (!isSupabaseConfigured || !supabase) {
-    let diagnosis = 'لم يتم قراءة متغيرات الربط (VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY) داخل المتصفح.';
-    if (supabaseConfigDiagnostics.keyLooksLikeSecret) {
-      diagnosis = 'تم وضع مفتاح سري (sb_secret_ / service_role) بدلاً من مفتاح anon public! استبدله بمفتاح anon public من Supabase.';
-    } else if (supabaseConfigDiagnostics.isDashboardUrl) {
-      diagnosis = 'تم وضع رابط لوحة تحكم Supabase (supabase.com/dashboard) بدلاً من رابط Project URL! انسخ Project URL من Settings -> Data API (ينتهي بـ .supabase.co).';
-    } else if (supabaseConfigDiagnostics.hasUrl && !supabaseConfigDiagnostics.urlValid) {
-      diagnosis = 'رابط VITE_SUPABASE_URL غير صالح — يجب أن يبدأ بـ https:// وينتهي بـ .supabase.co بدون مسار إضافي.';
-    } else if (supabaseConfigDiagnostics.hasUrl && !supabaseConfigDiagnostics.hasKey) {
-      diagnosis = 'تم العثور على رابط المشروع ولكن مفتاح VITE_SUPABASE_ANON_KEY مفقود.';
-    } else if (!supabaseConfigDiagnostics.hasUrl && supabaseConfigDiagnostics.hasKey) {
-      diagnosis = 'تم العثور على المفتاح ولكن رابط VITE_SUPABASE_URL مفقود.';
-    }
-    return {
-      configured: false,
-      projectHost: supabaseConfigDiagnostics.projectHost,
-      keyLooksLikeSecret: supabaseConfigDiagnostics.keyLooksLikeSecret,
-      hasUrl: supabaseConfigDiagnostics.hasUrl,
-      hasKey: supabaseConfigDiagnostics.hasKey,
-      tablesReachable: false,
-      adsCount: null,
-      packagesCount: null,
-      settingsFound: false,
-      diagnosis,
-    };
-  }
-
-  try {
-    const [settingsRes, adsRes, pkgRes] = await Promise.all([
-      supabase.from('elanati_site_settings').select('id').eq('id', 1).maybeSingle(),
-      supabase.from('elanati_ads').select('id', { count: 'exact', head: true }),
-      supabase.from('elanati_packages').select('id', { count: 'exact', head: true }),
-    ]);
-
-    const firstError = settingsRes.error || adsRes.error || pkgRes.error;
-    if (firstError) {
-      const msg = firstError.message || '';
-      const code = (firstError as { code?: string }).code || '';
-      let diagnosis = `تم الوصول لمشروع Supabase ولكن حدث خطأ في قاعدة البيانات: ${msg}`;
-
-      if (code === '42P01' || msg.includes('does not exist') || msg.includes('schema cache')) {
-        diagnosis = 'تم الربط بمشروع Supabase بنجاح، لكن جداول إعلاناتي (elanati_*) غير موجودة بعد! انسخ محتوى supabase/schema.sql ونفذه في Supabase SQL Editor.';
-      } else if (msg.toLowerCase().includes('invalid api key') || code === 'PGRST301') {
-        diagnosis = 'مفتاح VITE_SUPABASE_ANON_KEY غير صحيح لهذا المشروع.';
-      } else if (code === '42501' || msg.toLowerCase().includes('permission denied')) {
-        diagnosis = 'صلاحيات الجداول غير مكتملة — أعد تشغيل آخر نسخة من supabase/schema.sql لتطبيق GRANT و RLS.';
-      }
-
-      return {
-        configured: true,
-        projectHost: supabaseConfigDiagnostics.projectHost,
-        keyLooksLikeSecret: false,
-        hasUrl: true,
-        hasKey: true,
-        tablesReachable: false,
-        adsCount: null,
-        packagesCount: null,
-        settingsFound: false,
-        errorCode: code,
-        errorMessage: msg,
-        diagnosis,
-      };
-    }
-
-    return {
-      configured: true,
-      projectHost: supabaseConfigDiagnostics.projectHost,
-      keyLooksLikeSecret: false,
-      hasUrl: true,
-      hasKey: true,
-      tablesReachable: true,
-      adsCount: adsRes.count ?? 0,
-      packagesCount: pkgRes.count ?? 0,
-      settingsFound: Boolean(settingsRes.data),
-      diagnosis: 'الاتصال بقاعدة البيانات Supabase سليم 100% والجداول جاهزة وتستجيب بنجاح.',
-    };
-  } catch (err: any) {
-    return {
-      configured: true,
-      projectHost: supabaseConfigDiagnostics.projectHost,
-      keyLooksLikeSecret: false,
-      hasUrl: true,
-      hasKey: true,
-      tablesReachable: false,
-      adsCount: null,
-      packagesCount: null,
-      settingsFound: false,
-      errorMessage: err?.message || 'Network error',
-      diagnosis: `تعذر الاتصال بخادم Supabase (${err?.message || 'تحقق من رابط المشروع'}).`,
-    };
-  }
-}
-

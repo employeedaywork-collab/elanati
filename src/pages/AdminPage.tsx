@@ -23,7 +23,7 @@ import {
   DEFAULT_SITE_SETTINGS,
   INITIAL_PACKAGES,
 } from '../data/seedData';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import {
   fetchAllAdsAdmin,
   fetchAllTicketsAdmin,
@@ -386,11 +386,6 @@ export default function AdminPage() {
           </div>
 
           <div className="flex items-center gap-2.5">
-            {!isSupabaseConfigured && (
-              <span className="hidden md:inline-block px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold">
-                معاينة محلية
-              </span>
-            )}
             <button
               type="button"
               onClick={() => void refreshAll()}

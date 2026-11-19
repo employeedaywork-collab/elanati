@@ -1,19 +1,20 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, X } from 'lucide-react';
+import { Clock, Menu, X } from 'lucide-react';
 
 interface NavbarProps {
   siteName: string;
   onAddAd: () => void;
+  onOpenPortal: () => void;
 }
 
-export default function Navbar({ siteName, onAddAd }: NavbarProps) {
+export default function Navbar({ siteName, onAddAd, onOpenPortal }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
     <header className="fixed top-0 right-0 left-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16 gap-8">
+        <div className="flex justify-between items-center h-16 gap-6">
           <a
             href="#home"
             className="text-xl font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-blue-600 rounded"
@@ -21,7 +22,7 @@ export default function Navbar({ siteName, onAddAd }: NavbarProps) {
             {siteName}
           </a>
 
-          <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600">
+          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
             <a
               href="#home"
               className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
@@ -60,7 +61,15 @@ export default function Navbar({ siteName, onAddAd }: NavbarProps) {
             </Link>
           </nav>
 
-          <div className="hidden md:flex items-center shrink-0">
+          <div className="hidden md:flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={onOpenPortal}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-800 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+            >
+              <Clock className="w-4 h-4 text-blue-700" />
+              متابعة اشتراكي
+            </button>
             <button
               type="button"
               onClick={onAddAd}
@@ -129,9 +138,20 @@ export default function Navbar({ siteName, onAddAd }: NavbarProps) {
                 type="button"
                 onClick={() => {
                   setIsOpen(false);
+                  onOpenPortal();
+                }}
+                className="border border-slate-200 text-slate-800 px-6 py-3 rounded-xl font-bold text-center inline-flex items-center justify-center gap-2"
+              >
+                <Clock className="w-4 h-4 text-blue-700" />
+                متابعة اشتراكي وإعلاناتي
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
                   onAddAd();
                 }}
-                className="bg-blue-700 hover:bg-blue-800 text-white px-6 py-3 rounded-xl font-bold mt-2 text-center"
+                className="bg-blue-700 hover:bg-blue-800 text-white px-6 py-3 rounded-xl font-bold mt-1 text-center"
               >
                 أضف إعلانك
               </button>

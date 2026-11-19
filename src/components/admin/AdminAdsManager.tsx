@@ -1,7 +1,13 @@
 import { useState } from 'react';
-import { Check, Edit3, Plus, Search, Star, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit3, Plus, Search, Star, Trash2, X } from 'lucide-react';
 import { EGYPT_GOVERNORATES } from '../../data/seedData';
-import { createAd, deleteAdAdmin, updateAdAdmin } from '../../services/dataService';
+import {
+  createAd,
+  deleteAdAdmin,
+  getRemainingDays,
+  isAdExpired,
+  updateAdAdmin,
+} from '../../services/dataService';
 import { Ad, AdCategory, AdStatus } from '../../types';
 
 interface AdminAdsManagerProps {
@@ -17,7 +23,7 @@ const STATUS_META: Record<AdStatus, { label: string; cls: string }> = {
 };
 
 export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps) {
-  const [statusFilter, setStatusFilter] = useState<AdStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<AdStatus | 'all' | 'expired'>('all');
   const [search, setSearch] = useState('');
   const [editingAd, setEditingAd] = useState<Ad | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
@@ -31,11 +37,20 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
     city: 'القاهرة',
     image: '📦',
     image_url: '',
+    banner_url: '',
+    package_name: 'مجاني',
+    duration_days: 7 as number | null,
     featured: false,
   });
 
   const filtered = ads.filter((ad) => {
-    const matchesStatus = statusFilter === 'all' || ad.status === statusFilter;
+    const expired = isAdExpired(ad);
+    const matchesStatus =
+      statusFilter === 'all'
+        ? true
+        : statusFilter === 'expired'
+        ? expired
+        : ad.status === statusFilter;
     const q = search.trim().toLowerCase();
     const matchesSearch =
       !q ||
@@ -65,6 +80,23 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
     }
   };
 
+  const handleQuickExtend = async (ad: Ad, days: number | null) => {
+    setBusyId(ad.id);
+    try {
+      const now = new Date();
+      const nextExpiry =
+        days === null ? null : new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+      await updateAdAdmin(ad.id, {
+        status: 'approved',
+        starts_at: now.toISOString(),
+        expires_at: nextExpiry,
+      });
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     setBusyId(id);
     try {
@@ -80,6 +112,12 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
     if (!editingAd) return;
     setBusyId(editingAd.id);
     try {
+      const priorityRank =
+        editingAd.package_name === 'المؤسسي'
+          ? 2
+          : editingAd.package_name === 'الاحترافي' || editingAd.featured
+          ? 1
+          : 0;
       await updateAdAdmin(editingAd.id, {
         title: editingAd.title,
         category: editingAd.category,
@@ -88,7 +126,11 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
         description: editingAd.description,
         status: editingAd.status,
         featured: editingAd.featured,
+        package_name: editingAd.package_name || 'مجاني',
+        priority_rank: priorityRank,
         image_url: editingAd.image_url,
+        banner_url: editingAd.banner_url,
+        expires_at: editingAd.expires_at ?? null,
       });
       setEditingAd(null);
       await onRefresh();
@@ -115,12 +157,26 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
         city: 'القاهرة',
         image: '📦',
         image_url: '',
+        banner_url: '',
+        package_name: 'مجاني',
+        duration_days: 7,
         featured: false,
       });
       await onRefresh();
     } finally {
       setBusyId(null);
     }
+  };
+
+  const setEditingDuration = (days: number | null) => {
+    if (!editingAd) return;
+    if (days === null) {
+      setEditingAd({ ...editingAd, expires_at: null });
+      return;
+    }
+    const base = new Date();
+    const target = new Date(base.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+    setEditingAd({ ...editingAd, starts_at: base.toISOString(), expires_at: target });
   };
 
   return (
@@ -144,6 +200,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 ['all', 'الكل'],
                 ['pending', 'قيد المراجعة'],
                 ['approved', 'منشور'],
+                ['expired', 'منتهي المدة'],
                 ['rejected', 'مرفوض'],
                 ['archived', 'مؤرشف'],
               ] as const
@@ -183,7 +240,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
               <thead className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
                 <tr>
                   <th className="py-3.5 px-4">الإعلان</th>
-                  <th className="py-3.5 px-4">التصنيف والمحافظة</th>
+                  <th className="py-3.5 px-4">الباقة والمدة</th>
                   <th className="py-3.5 px-4">التواصل</th>
                   <th className="py-3.5 px-4">المشاهدات</th>
                   <th className="py-3.5 px-4">الحالة</th>
@@ -191,93 +248,130 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((ad) => (
-                  <tr key={ad.id} className="hover:bg-slate-50/70">
-                    <td className="py-3.5 px-4 max-w-xs">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-xl shrink-0">{ad.image}</span>
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-900 truncate">{ad.title}</p>
-                          <p className="text-xs text-slate-500 truncate">{ad.description}</p>
+                {filtered.map((ad) => {
+                  const expired = isAdExpired(ad);
+                  const remDays = getRemainingDays(ad.expires_at);
+                  return (
+                    <tr key={ad.id} className="hover:bg-slate-50/70">
+                      <td className="py-3.5 px-4 max-w-xs">
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-xl shrink-0">{ad.image}</span>
+                          <div className="min-w-0">
+                            <p className="font-bold text-slate-900 truncate">{ad.title}</p>
+                            <p className="text-xs text-slate-500 truncate">
+                              {ad.category} · {ad.city}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap text-xs text-slate-700">
-                      {ad.category} · {ad.city}
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap tabular-nums text-xs font-semibold text-slate-700">
-                      {ad.contact}
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap tabular-nums text-xs font-bold text-slate-700">
-                      {ad.views_count}
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <span
-                        className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg ${
-                          STATUS_META[ad.status]?.cls || 'bg-slate-100'
-                        }`}
-                      >
-                        {STATUS_META[ad.status]?.label || ad.status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        {ad.status !== 'approved' && (
-                          <button
-                            type="button"
-                            disabled={busyId === ad.id}
-                            onClick={() => void handleStatusChange(ad.id, 'approved')}
-                            title="اعتماد ونشر"
-                            className="p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                          >
-                            <Check className="w-4 h-4" />
-                          </button>
-                        )}
-                        {ad.status === 'pending' && (
-                          <button
-                            type="button"
-                            disabled={busyId === ad.id}
-                            onClick={() => void handleStatusChange(ad.id, 'rejected')}
-                            title="رفض"
-                            className="p-2 rounded-lg bg-red-50 text-red-700 hover:bg-red-100"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={busyId === ad.id}
-                          onClick={() => void handleToggleFeatured(ad)}
-                          title={ad.featured ? 'إزالة التمييز' : 'تمييز الإعلان'}
-                          className={`p-2 rounded-lg transition-colors ${
-                            ad.featured
-                              ? 'bg-amber-100 text-amber-700'
-                              : 'bg-slate-100 text-slate-500 hover:text-amber-700'
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-xs">
+                        <p className="font-bold text-slate-800">{ad.package_name || 'مجاني'}</p>
+                        <p
+                          className={`text-[11px] font-semibold tabular-nums mt-0.5 ${
+                            expired
+                              ? 'text-red-600'
+                              : remDays === null
+                              ? 'text-emerald-700'
+                              : 'text-slate-500'
                           }`}
                         >
-                          <Star className={`w-4 h-4 ${ad.featured ? 'fill-amber-400' : ''}`} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingAd(ad)}
-                          title="تعديل"
-                          className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          {expired
+                            ? 'منتهي الصلاحية'
+                            : remDays === null
+                            ? 'ظهور دائم'
+                            : `متبقي ${remDays} يوم (حتى ${ad.expires_at?.split('T')[0]})`}
+                        </p>
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap tabular-nums text-xs font-semibold text-slate-700">
+                        {ad.contact}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap tabular-nums text-xs font-bold text-slate-700">
+                        {ad.views_count}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span
+                          className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg ${
+                            expired && ad.status === 'approved'
+                              ? 'bg-red-50 text-red-700 border border-red-200'
+                              : STATUS_META[ad.status]?.cls || 'bg-slate-100'
+                          }`}
                         >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busyId === ad.id}
-                          onClick={() => void handleDelete(ad.id)}
-                          title="حذف"
-                          className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {expired && ad.status === 'approved'
+                            ? 'منتهي تلقائياً'
+                            : STATUS_META[ad.status]?.label || ad.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          {ad.status !== 'approved' && (
+                            <button
+                              type="button"
+                              disabled={busyId === ad.id}
+                              onClick={() => void handleStatusChange(ad.id, 'approved')}
+                              title="اعتماد ونشر"
+                              className="p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                          )}
+                          {ad.status === 'pending' && (
+                            <button
+                              type="button"
+                              disabled={busyId === ad.id}
+                              onClick={() => void handleStatusChange(ad.id, 'rejected')}
+                              title="رفض"
+                              className="p-2 rounded-lg bg-red-50 text-red-700 hover:bg-red-100"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                          {expired && (
+                            <button
+                              type="button"
+                              disabled={busyId === ad.id}
+                              onClick={() => void handleQuickExtend(ad, 7)}
+                              title="تجديد الظهور لمدة 7 أيام"
+                              className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 text-[11px] font-bold inline-flex items-center gap-1"
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              +7 أيام
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={busyId === ad.id}
+                            onClick={() => void handleToggleFeatured(ad)}
+                            title={ad.featured ? 'إزالة التمييز' : 'تمييز الإعلان'}
+                            className={`p-2 rounded-lg transition-colors ${
+                              ad.featured
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-slate-100 text-slate-500 hover:text-amber-700'
+                            }`}
+                          >
+                            <Star className={`w-4 h-4 ${ad.featured ? 'fill-amber-400' : ''}`} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingAd(ad)}
+                            title="تعديل"
+                            className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyId === ad.id}
+                            onClick={() => void handleDelete(ad.id)}
+                            title="حذف"
+                            className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -292,7 +386,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
             className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-extrabold text-lg text-slate-900">تعديل الإعلان</h3>
+              <h3 className="font-extrabold text-lg text-slate-900">تعديل الإعلان والمدة</h3>
               <button type="button" onClick={() => setEditingAd(null)} className="p-1.5 rounded-lg hover:bg-slate-100">
                 <X className="w-5 h-5" />
               </button>
@@ -349,6 +443,65 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 <option value="archived">مؤرشف</option>
               </select>
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">الباقة</label>
+                <select
+                  value={editingAd.package_name || 'مجاني'}
+                  onChange={(e) => setEditingAd({ ...editingAd, package_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+                >
+                  <option value="مجاني">مجاني (7 أيام)</option>
+                  <option value="الاحترافي">الاحترافي (30 يوم)</option>
+                  <option value="المؤسسي">المؤسسي (ظهور دائم)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">تجديد سريع للمدة</label>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditingDuration(7)}
+                    className="flex-1 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-xs font-bold"
+                  >
+                    +7 أيام
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingDuration(30)}
+                    className="flex-1 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-xs font-bold"
+                  >
+                    +30 يوم
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingDuration(null)}
+                    className="flex-1 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-xs font-bold"
+                  >
+                    دائم
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <input
+              type="url"
+              placeholder="رابط الصورة الرئيسية (اختياري)"
+              value={editingAd.image_url || ''}
+              onChange={(e) => setEditingAd({ ...editingAd, image_url: e.target.value })}
+              className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs text-left"
+              dir="ltr"
+            />
+            <input
+              type="url"
+              placeholder="رابط البانر المؤسسي (اختياري)"
+              value={editingAd.banner_url || ''}
+              onChange={(e) => setEditingAd({ ...editingAd, banner_url: e.target.value })}
+              className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs text-left"
+              dir="ltr"
+            />
+
             <textarea
               rows={4}
               required
@@ -420,13 +573,40 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 ))}
               </select>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <select
+                value={newAdForm.package_name}
+                onChange={(e) => {
+                  const pkg = e.target.value;
+                  setNewAdForm({
+                    ...newAdForm,
+                    package_name: pkg,
+                    duration_days: pkg === 'مجاني' ? 7 : pkg === 'الاحترافي' ? 30 : null,
+                    featured: pkg !== 'مجاني',
+                  });
+                }}
+                className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                <option value="مجاني">مجاني (7 أيام)</option>
+                <option value="الاحترافي">الاحترافي (30 يوم)</option>
+                <option value="المؤسسي">المؤسسي (دائم + بانر)</option>
+              </select>
+              <input
+                type="tel"
+                required
+                placeholder="رقم التواصل (01xxxxxxxxx)"
+                value={newAdForm.contact}
+                onChange={(e) => setNewAdForm({ ...newAdForm, contact: e.target.value })}
+                className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums"
+              />
+            </div>
             <input
-              type="tel"
-              required
-              placeholder="رقم التواصل (01xxxxxxxxx)"
-              value={newAdForm.contact}
-              onChange={(e) => setNewAdForm({ ...newAdForm, contact: e.target.value })}
-              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums"
+              type="url"
+              placeholder="رابط البانر الإعلاني (اختياري)"
+              value={newAdForm.banner_url}
+              onChange={(e) => setNewAdForm({ ...newAdForm, banner_url: e.target.value })}
+              className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs text-left"
+              dir="ltr"
             />
             <textarea
               rows={4}

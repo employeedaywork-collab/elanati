@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Search, Star } from 'lucide-react';
+import { Clock, Crown, Image as ImageIcon, Search, Star } from 'lucide-react';
 import { EGYPT_GOVERNORATES } from '../data/seedData';
+import { getRemainingDays } from '../services/dataService';
 import { Ad, AdCategory } from '../types';
 
 interface AdvertisementsProps {
@@ -37,6 +38,10 @@ export default function Advertisements({
     return matchesCategory && matchesCity && matchesSearch;
   });
 
+  const enterpriseBanners = ads.filter(
+    (ad) => ad.status === 'approved' && (ad.priority_rank === 2 || Boolean(ad.banner_url))
+  );
+
   const formatDate = (iso: string) => {
     try {
       return iso.split('T')[0];
@@ -57,6 +62,63 @@ export default function Advertisements({
             اكتشف أحدث عروض الموزعين والتجار والمحلات في مختلف محافظات مصر
           </p>
         </div>
+
+        {/* Enterprise VIP Banners Showcase */}
+        {!loading && enterpriseBanners.length > 0 && (
+          <div className="mb-10 space-y-4">
+            <div className="flex items-center gap-2 text-xs font-extrabold text-blue-800">
+              <Crown className="w-4 h-4 text-amber-500" />
+              <span>بانرات وإعلانات الشركات المميزة (الباقة المؤسسية)</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {enterpriseBanners.slice(0, 2).map((ad) => (
+                <div
+                  key={`banner-${ad.id}`}
+                  onClick={() => onViewAd(ad)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') onViewAd(ad);
+                  }}
+                  className="cursor-pointer rounded-2xl bg-slate-900 text-white border border-blue-500/40 overflow-hidden shadow-md hover:shadow-lg transition-all flex flex-col sm:flex-row"
+                >
+                  {ad.banner_url && (
+                    <div className="sm:w-44 h-36 sm:h-auto shrink-0 bg-slate-800">
+                      <img
+                        src={ad.banner_url}
+                        alt={ad.title}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  )}
+                  <div className="p-5 flex-1 flex flex-col justify-between gap-3">
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400">
+                          <Crown className="w-3.5 h-3.5" />
+                          أولوية مؤسسية · {ad.city}
+                        </span>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300">
+                          ظهور دائم
+                        </span>
+                      </div>
+                      <h3 className="text-base font-extrabold text-white mb-1">{ad.title}</h3>
+                      <p className="text-xs text-slate-300 line-clamp-2">{ad.description}</p>
+                    </div>
+                    <div className="flex items-center justify-between text-xs pt-1 border-t border-white/10">
+                      <span className="tabular-nums text-slate-300 font-semibold">{ad.contact}</span>
+                      <span className="text-amber-400 font-bold">استعراض البانر ←</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col lg:flex-row gap-4 mb-10 items-stretch lg:items-center">
           <div className="flex-1 relative">
@@ -113,72 +175,99 @@ export default function Advertisements({
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAds.map((ad) => (
-              <article
-                key={ad.id}
-                className={`group flex flex-col justify-between rounded-2xl border overflow-hidden transition-all ${
-                  ad.featured
-                    ? 'bg-amber-50/40 border-amber-200 hover:border-amber-300'
-                    : 'bg-white border-slate-200 hover:border-blue-300'
-                }`}
-              >
-                <div className="p-6">
-                  {ad.image_url ? (
-                    <div className="mb-4 h-40 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
-                      <img
-                        src={ad.image_url}
-                        alt={ad.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                    </div>
-                  ) : null}
+            {filteredAds.map((ad) => {
+              const remainingDays = getRemainingDays(ad.expires_at);
+              const isEnterprise = ad.package_name === 'المؤسسي' || ad.priority_rank === 2;
+              const extraCount = ad.extra_images?.length || 0;
 
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <span className="text-3xl leading-none" aria-hidden="true">
-                      {ad.image}
-                    </span>
-                    {ad.featured && (
-                      <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-800">
-                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                        إعلان مميز
+              return (
+                <article
+                  key={ad.id}
+                  className={`group flex flex-col justify-between rounded-2xl border overflow-hidden transition-all ${
+                    isEnterprise
+                      ? 'bg-blue-50/30 border-blue-300 hover:border-blue-400'
+                      : ad.featured
+                      ? 'bg-amber-50/40 border-amber-200 hover:border-amber-300'
+                      : 'bg-white border-slate-200 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="p-6">
+                    {ad.image_url ? (
+                      <div className="relative mb-4 h-40 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
+                        <img
+                          src={ad.image_url}
+                          alt={ad.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                        {extraCount > 0 && (
+                          <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900/80 text-white text-[11px] font-bold">
+                            <ImageIcon className="w-3 h-3" />+{extraCount} صور
+                          </span>
+                        )}
+                      </div>
+                    ) : null}
+
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <span className="text-3xl leading-none" aria-hidden="true">
+                        {ad.image}
                       </span>
-                    )}
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {isEnterprise ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800">
+                            <Crown className="w-3 h-3" />
+                            مؤسسي
+                          </span>
+                        ) : ad.featured ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">
+                            <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                            إعلان مميز
+                          </span>
+                        ) : null}
+
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 tabular-nums">
+                          <Clock className="w-3 h-3 text-slate-500" />
+                          {remainingDays === null
+                            ? 'ظهور دائم'
+                            : `متبقي ${remainingDays} ${remainingDays === 1 ? 'يوم' : 'أيام'}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-2 tabular-nums">
+                      <span className="text-blue-700 font-bold">{ad.category}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{ad.city}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{formatDate(ad.starts_at || ad.created_at)}</span>
+                    </div>
+
+                    <h3 className="text-lg font-extrabold text-slate-900 mb-2 group-hover:text-blue-700 transition-colors">
+                      {ad.title}
+                    </h3>
+                    <p className="text-slate-600 text-sm leading-relaxed line-clamp-2">
+                      {ad.description}
+                    </p>
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-2 tabular-nums">
-                    <span className="text-blue-700 font-bold">{ad.category}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{ad.city}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{formatDate(ad.created_at)}</span>
+                  <div className="px-6 py-4 border-t border-slate-200/80 bg-white/80 flex items-center justify-between gap-3">
+                    <span className="text-sm font-semibold text-slate-700 tabular-nums truncate">
+                      {ad.contact}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onViewAd(ad)}
+                      className="text-blue-700 hover:text-blue-900 text-sm font-bold transition-colors whitespace-nowrap shrink-0"
+                    >
+                      عرض التفاصيل ←
+                    </button>
                   </div>
-
-                  <h3 className="text-lg font-extrabold text-slate-900 mb-2 group-hover:text-blue-700 transition-colors">
-                    {ad.title}
-                  </h3>
-                  <p className="text-slate-600 text-sm leading-relaxed line-clamp-2">
-                    {ad.description}
-                  </p>
-                </div>
-
-                <div className="px-6 py-4 border-t border-slate-200/80 bg-white/80 flex items-center justify-between gap-3">
-                  <span className="text-sm font-semibold text-slate-700 tabular-nums truncate">
-                    {ad.contact}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onViewAd(ad)}
-                    className="text-blue-700 hover:text-blue-900 text-sm font-bold transition-colors whitespace-nowrap shrink-0"
-                  >
-                    عرض التفاصيل ←
-                  </button>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         )}
 

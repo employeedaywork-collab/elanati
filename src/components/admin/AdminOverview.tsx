@@ -1,4 +1,5 @@
 import { Check, Eye, Inbox, Layers, Megaphone, X } from 'lucide-react';
+import { isAdExpired } from '../../services/dataService';
 import { Ad, ContactMessage, PackageRequest } from '../../types';
 
 interface AdminOverviewProps {
@@ -21,7 +22,8 @@ export default function AdminOverview({
   onOpenTicket,
 }: AdminOverviewProps) {
   const pendingAds = ads.filter((a) => a.status === 'pending');
-  const approvedAds = ads.filter((a) => a.status === 'approved');
+  const approvedActiveAds = ads.filter((a) => a.status === 'approved' && !isAdExpired(a));
+  const expiredAdsCount = ads.filter((a) => isAdExpired(a)).length;
   const totalViews = ads.reduce((acc, ad) => acc + (ad.views_count || 0), 0);
   const openTickets = tickets.filter((t) => t.status === 'new' || t.status === 'in_progress');
   const pendingPackages = packageRequests.filter((r) => r.status === 'pending');
@@ -35,10 +37,10 @@ export default function AdminOverview({
             <Megaphone className="w-4 h-4 text-blue-700" />
           </div>
           <p className="text-3xl font-extrabold text-slate-900 tabular-nums">
-            {approvedAds.length}
+            {approvedActiveAds.length}
           </p>
           <p className="text-xs text-slate-500 mt-1 tabular-nums">
-            {pendingAds.length} بانتظار المراجعة · {ads.length} إجمالي
+            {pendingAds.length} بانتظار المراجعة · {expiredAdsCount} منتهي المدة
           </p>
         </div>
 

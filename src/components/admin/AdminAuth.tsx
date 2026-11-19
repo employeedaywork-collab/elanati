@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Lock, ShieldCheck } from 'lucide-react';
-import { isSupabaseConfigured } from '../../lib/supabase';
 import { signInAdmin, signUpFirstAdmin } from '../../services/dataService';
 import { AdminSession } from '../../types';
 
@@ -30,7 +29,7 @@ export default function AdminAuth({ onSuccess }: AdminAuthProps) {
         const res = await signUpFirstAdmin(email, password);
         if (res.needsEmailConfirmation) {
           setInfo(
-            'تم إنشاء الحساب. تحقق من بريدك الإلكتروني لتأكيد الحساب ثم سجل الدخول، أو فعّل التأكيد التلقائي من Supabase Auth.'
+            'تم إنشاء الحساب بنجاح. تحقق من بريدك الإلكتروني لتأكيد الحساب ثم قم بتسجيل الدخول.'
           );
           setMode('login');
         } else if (res.session) {
@@ -69,12 +68,6 @@ export default function AdminAuth({ onSuccess }: AdminAuthProps) {
             </p>
           </div>
         </div>
-
-        {!isSupabaseConfigured && (
-          <div className="mb-5 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs leading-relaxed">
-            <strong>وضع المعاينة المحلية:</strong> لم يتم ربط متغيرات Supabase بعد (`VITE_SUPABASE_URL`). يمكنك الدخول بأي كلمة مرور (4 أحرف+) لتجربة جميع مزايا لوحة المدير محلياً قبل الربط.
-          </div>
-        )}
 
         {error && (
           <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
@@ -133,22 +126,20 @@ export default function AdminAuth({ onSuccess }: AdminAuthProps) {
           </button>
         </form>
 
-        {isSupabaseConfigured && (
-          <div className="mt-5 pt-4 border-t border-slate-100 text-center">
-            <button
-              type="button"
-              onClick={() => {
-                setMode(mode === 'login' ? 'register' : 'login');
-                setError('');
-              }}
-              className="text-xs font-bold text-blue-700 hover:text-blue-900"
-            >
-              {mode === 'login'
-                ? 'أول مرة تدخل؟ أنشئ كلمة مرور لبريد المدير المسجل'
-                : 'لديك حساب بالفعل؟ تسجيل الدخول'}
-            </button>
-          </div>
-        )}
+        <div className="mt-5 pt-4 border-t border-slate-100 text-center">
+          <button
+            type="button"
+            onClick={() => {
+              setMode(mode === 'login' ? 'register' : 'login');
+              setError('');
+            }}
+            className="text-xs font-bold text-blue-700 hover:text-blue-900"
+          >
+            {mode === 'login'
+              ? 'أول مرة تدخل؟ أنشئ كلمة مرور لبريد المدير المسجل'
+              : 'لديك حساب بالفعل؟ تسجيل الدخول'}
+          </button>
+        </div>
       </div>
     </div>
   );

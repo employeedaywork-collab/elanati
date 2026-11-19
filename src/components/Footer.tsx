@@ -7,11 +7,12 @@ interface FooterProps {
   settings: SiteSettings;
   onAddAd: () => void;
   onSelectCategory: (category: AdCategory | 'الكل') => void;
+  onOpenPortal?: () => void;
 }
 
 type InfoModalType = 'faq' | 'privacy' | 'terms' | null;
 
-export default function Footer({ settings, onAddAd, onSelectCategory }: FooterProps) {
+export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPortal }: FooterProps) {
   const [infoModal, setInfoModal] = useState<InfoModalType>(null);
 
   const handleCategoryClick = (category: AdCategory) => {
@@ -31,13 +32,24 @@ export default function Footer({ settings, onAddAd, onSelectCategory }: FooterPr
             <p className="text-slate-400 text-base mb-7 max-w-xl mx-auto">
               انضم للتجار والموزعين في جميع محافظات مصر وابدأ باستقبال طلبات العملاء اليوم.
             </p>
-            <button
-              type="button"
-              onClick={onAddAd}
-              className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-8 py-3.5 rounded-xl font-extrabold text-base transition-colors"
-            >
-              أضف إعلانك الآن
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={onAddAd}
+                className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-8 py-3.5 rounded-xl font-extrabold text-base transition-colors"
+              >
+                أضف إعلانك الآن
+              </button>
+              {onOpenPortal && (
+                <button
+                  type="button"
+                  onClick={onOpenPortal}
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-7 py-3.5 rounded-xl font-bold text-base transition-colors"
+                >
+                  متابعة اشتراكي وإعلاناتي
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -73,6 +85,17 @@ export default function Footer({ settings, onAddAd, onSelectCategory }: FooterPr
                     تصفح الإعلانات
                   </a>
                 </li>
+                {onOpenPortal && (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={onOpenPortal}
+                      className="text-blue-300 hover:text-white font-semibold transition-colors"
+                    >
+                      متابعة اشتراكي والعدّاد التنازلي
+                    </button>
+                  </li>
+                )}
               </ul>
             </div>
 

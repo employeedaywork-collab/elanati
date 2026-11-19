@@ -740,7 +740,13 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
     password,
   });
   if (error) {
-    throw new Error(error.message === 'Invalid login credentials' ? 'بيانات الدخول غير صحيحة' : error.message);
+    if (error.message === 'Invalid login credentials') {
+      throw new Error('بيانات الدخول غير صحيحة');
+    }
+    if (error.message.toLowerCase().includes('email not confirmed')) {
+      throw new Error('البريد الإلكتروني غير مُؤكّد بعد — افتح رابط التأكيد في بريدك أو فعّل المستخدم من Supabase → Authentication → Users');
+    }
+    throw new Error(error.message);
   }
   if (!data.user?.email) {
     throw new Error('تعذر التحقق من حساب المدير');
@@ -775,7 +781,12 @@ export async function signUpFirstAdmin(email: string, password: string): Promise
     email: cleanEmail,
     password,
   });
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (error.message.toLowerCase().includes('already registered')) {
+      throw new Error('هذا البريد مسجل بالفعل في هذا المشروع — اختر "تسجيل الدخول" وأدخل كلمة المرور الخاصة بك.');
+    }
+    throw new Error(error.message);
+  }
 
   if (!data.session) {
     return { needsEmailConfirmation: true, session: null };
@@ -795,3 +806,115 @@ export async function signOutAdmin(): Promise<void> {
   }
   localStorage.removeItem(STORAGE_KEYS.previewAdmin);
 }
+
+export interface SupabaseDiagnosticReport {
+  configured: boolean;
+  projectHost: string;
+  keyLooksLikeSecret: boolean;
+  hasUrl: boolean;
+  hasKey: boolean;
+  tablesReachable: boolean;
+  adsCount: number | null;
+  packagesCount: number | null;
+  settingsFound: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  diagnosis: string;
+}
+
+export async function diagnoseSupabaseConnection(): Promise<SupabaseDiagnosticReport> {
+  const { supabaseConfigDiagnostics } = await import('../lib/supabase');
+
+  if (!isSupabaseConfigured || !supabase) {
+    let diagnosis = 'لم يتم قراءة متغيرات الربط (VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY) داخل المتصفح.';
+    if (supabaseConfigDiagnostics.keyLooksLikeSecret) {
+      diagnosis = 'تم وضع مفتاح سري (sb_secret_ / service_role) بدلاً من مفتاح anon public! استبدله بمفتاح anon public من Supabase.';
+    } else if (supabaseConfigDiagnostics.isDashboardUrl) {
+      diagnosis = 'تم وضع رابط لوحة تحكم Supabase (supabase.com/dashboard) بدلاً من رابط Project URL! انسخ Project URL من Settings -> Data API (ينتهي بـ .supabase.co).';
+    } else if (supabaseConfigDiagnostics.hasUrl && !supabaseConfigDiagnostics.urlValid) {
+      diagnosis = 'رابط VITE_SUPABASE_URL غير صالح — يجب أن يبدأ بـ https:// وينتهي بـ .supabase.co بدون مسار إضافي.';
+    } else if (supabaseConfigDiagnostics.hasUrl && !supabaseConfigDiagnostics.hasKey) {
+      diagnosis = 'تم العثور على رابط المشروع ولكن مفتاح VITE_SUPABASE_ANON_KEY مفقود.';
+    } else if (!supabaseConfigDiagnostics.hasUrl && supabaseConfigDiagnostics.hasKey) {
+      diagnosis = 'تم العثور على المفتاح ولكن رابط VITE_SUPABASE_URL مفقود.';
+    }
+    return {
+      configured: false,
+      projectHost: supabaseConfigDiagnostics.projectHost,
+      keyLooksLikeSecret: supabaseConfigDiagnostics.keyLooksLikeSecret,
+      hasUrl: supabaseConfigDiagnostics.hasUrl,
+      hasKey: supabaseConfigDiagnostics.hasKey,
+      tablesReachable: false,
+      adsCount: null,
+      packagesCount: null,
+      settingsFound: false,
+      diagnosis,
+    };
+  }
+
+  try {
+    const [settingsRes, adsRes, pkgRes] = await Promise.all([
+      supabase.from('elanati_site_settings').select('id').eq('id', 1).maybeSingle(),
+      supabase.from('elanati_ads').select('id', { count: 'exact', head: true }),
+      supabase.from('elanati_packages').select('id', { count: 'exact', head: true }),
+    ]);
+
+    const firstError = settingsRes.error || adsRes.error || pkgRes.error;
+    if (firstError) {
+      const msg = firstError.message || '';
+      const code = (firstError as { code?: string }).code || '';
+      let diagnosis = `تم الوصول لمشروع Supabase ولكن حدث خطأ في قاعدة البيانات: ${msg}`;
+
+      if (code === '42P01' || msg.includes('does not exist') || msg.includes('schema cache')) {
+        diagnosis = 'تم الربط بمشروع Supabase بنجاح، لكن جداول إعلاناتي (elanati_*) غير موجودة بعد! انسخ محتوى supabase/schema.sql ونفذه في Supabase SQL Editor.';
+      } else if (msg.toLowerCase().includes('invalid api key') || code === 'PGRST301') {
+        diagnosis = 'مفتاح VITE_SUPABASE_ANON_KEY غير صحيح لهذا المشروع.';
+      } else if (code === '42501' || msg.toLowerCase().includes('permission denied')) {
+        diagnosis = 'صلاحيات الجداول غير مكتملة — أعد تشغيل آخر نسخة من supabase/schema.sql لتطبيق GRANT و RLS.';
+      }
+
+      return {
+        configured: true,
+        projectHost: supabaseConfigDiagnostics.projectHost,
+        keyLooksLikeSecret: false,
+        hasUrl: true,
+        hasKey: true,
+        tablesReachable: false,
+        adsCount: null,
+        packagesCount: null,
+        settingsFound: false,
+        errorCode: code,
+        errorMessage: msg,
+        diagnosis,
+      };
+    }
+
+    return {
+      configured: true,
+      projectHost: supabaseConfigDiagnostics.projectHost,
+      keyLooksLikeSecret: false,
+      hasUrl: true,
+      hasKey: true,
+      tablesReachable: true,
+      adsCount: adsRes.count ?? 0,
+      packagesCount: pkgRes.count ?? 0,
+      settingsFound: Boolean(settingsRes.data),
+      diagnosis: 'الاتصال بقاعدة البيانات Supabase سليم 100% والجداول جاهزة وتستجيب بنجاح.',
+    };
+  } catch (err: any) {
+    return {
+      configured: true,
+      projectHost: supabaseConfigDiagnostics.projectHost,
+      keyLooksLikeSecret: false,
+      hasUrl: true,
+      hasKey: true,
+      tablesReachable: false,
+      adsCount: null,
+      packagesCount: null,
+      settingsFound: false,
+      errorMessage: err?.message || 'Network error',
+      diagnosis: `تعذر الاتصال بخادم Supabase (${err?.message || 'تحقق من رابط المشروع'}).`,
+    };
+  }
+}
+

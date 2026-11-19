@@ -764,6 +764,122 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 
+-- قراءة قوالب ومواعيد التنبيه فقط للعرض التلقائي داخل المنصة (بدون أي مفاتيح سرية)
+CREATE OR REPLACE FUNCTION public.get_elanati_public_templates()
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT jsonb_build_object(
+    'free_reminder_hours_before', COALESCE(free_reminder_hours_before, 48),
+    'paid_reminder_days_before', COALESCE(paid_reminder_days_before, 7),
+    'free_expiry_template', free_expiry_template,
+    'paid_expiry_template', paid_expiry_template
+  )
+  FROM public.elanati_automation_config
+  WHERE id = 1
+  LIMIT 1;
+$$;
+
+-- الرد التلقائي الذكي داخل نظام التذاكر والمحادثة في المنصة (مجاني بالكامل)
+CREATE OR REPLACE FUNCTION public.send_elanati_internal_auto_reply(
+  p_ticket_code text,
+  p_client_name text,
+  p_client_phone text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_clean_code text := upper(trim(COALESCE(p_ticket_code, '')));
+  v_digits text := regexp_replace(COALESCE(p_client_phone, ''), '\D', '', 'g');
+  v_ad record;
+  v_sub record;
+  v_template text;
+  v_reply text;
+  v_name text;
+  v_rem_days integer;
+BEGIN
+  IF v_clean_code = '' THEN
+    RETURN;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.elanati_contact_messages m WHERE upper(m.ticket_code) = v_clean_code
+  ) THEN
+    RETURN;
+  END IF;
+
+  -- تجنب تكرار الرد الآلي على نفس التذكرة
+  IF EXISTS (
+    SELECT 1 FROM public.elanati_support_messages sm
+    WHERE upper(sm.ticket_code) = v_clean_code AND sm.sender_role = 'admin'
+  ) THEN
+    RETURN;
+  END IF;
+
+  IF v_digits <> '' THEN
+    SELECT *
+    INTO v_sub
+    FROM public.elanati_package_requests r
+    WHERE regexp_replace(r.client_phone, '\D', '', 'g') = v_digits
+    ORDER BY CASE WHEN r.status = 'activated' THEN 0 ELSE 1 END, r.created_at DESC
+    LIMIT 1;
+
+    SELECT *
+    INTO v_ad
+    FROM public.elanati_ads a
+    WHERE regexp_replace(a.contact, '\D', '', 'g') = v_digits
+    ORDER BY a.created_at DESC
+    LIMIT 1;
+  END IF;
+
+  v_name := COALESCE(
+    NULLIF(trim(COALESCE(v_ad.client_name, '')), ''),
+    NULLIF(trim(COALESCE(v_sub.client_name, '')), ''),
+    NULLIF(trim(COALESCE(p_client_name, '')), ''),
+    'عميلنا العزيز'
+  );
+
+  IF v_sub.id IS NOT NULL AND v_sub.status = 'activated' AND v_sub.expires_at IS NOT NULL THEN
+    v_rem_days := GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_sub.expires_at - now())) / 86400)::integer);
+    SELECT paid_expiry_template INTO v_template FROM public.elanati_automation_config WHERE id = 1;
+    v_reply := COALESCE(
+      v_template,
+      E'أهلاً أستاذ {الاسم}، مع حضرتك إدارة منصة إعلاناتي 👋\nنود تذكير حضرتك بأن اشتراكك في باقة "{الباقة}" (كود {كود_الاشتراك}) سينتهي خلال {الأيام_المتبقية} أيام بتاريخ {تاريخ_الانتهاء}.\nحتى تستمر إعلاناتك ظاهرة أمام التجار بدون انقطاع، يمكنك تجديد الاشتراك عبر فودافون كاش أو إنستاباي على رقم 01007008707.\nتحب نجهز لحضرتك التجديد الآن؟'
+    );
+    v_reply := replace(v_reply, '{الاسم}', v_name);
+    v_reply := replace(v_reply, '{الباقة}', v_sub.package_name);
+    v_reply := replace(v_reply, '{كود_الاشتراك}', COALESCE(v_sub.subscription_code, '-'));
+    v_reply := replace(v_reply, '{الأيام_المتبقية}', v_rem_days::text);
+    v_reply := replace(v_reply, '{تاريخ_الانتهاء}', to_char(v_sub.expires_at, 'YYYY-MM-DD'));
+  ELSIF v_ad.id IS NOT NULL THEN
+    SELECT free_expiry_template INTO v_template FROM public.elanati_automation_config WHERE id = 1;
+    v_reply := COALESCE(
+      v_template,
+      E'أهلاً أستاذ {الاسم}، مع حضرتك إدارة منصة إعلاناتي 👋\nإعلان حضرتك "{عنوان_الإعلان}" شافوه {المشاهدات} تاجر ومهتم حتى الآن، وهينتهي ظهوره المجاني خلال 48 ساعة.\nلو حابب يفضل إعلانك ظاهر 30 يوم كاملة في أعلى النتائج + نجمة تمييز + إمكانية إضافة 10 إعلانات وصور متعددة للمنتجات:\nتقدر تفعّل الباقة الاحترافية بـ 249 جنيه فقط عبر فودافون كاش أو إنستاباي على رقم 01007008707 وهيتفعل فوراً مع عدّاد لمتابعة اشتراكك.\nتحب أفعل لحضرتك الترقية؟'
+    );
+    v_reply := replace(v_reply, '{الاسم}', v_name);
+    v_reply := replace(v_reply, '{عنوان_الإعلان}', v_ad.title);
+    v_reply := replace(v_reply, '{المشاهدات}', COALESCE(v_ad.views_count, 0)::text);
+    v_reply := replace(v_reply, '{تاريخ_الانتهاء}', COALESCE(to_char(v_ad.expires_at, 'YYYY-MM-DD'), 'دائم'));
+  ELSE
+    v_reply := format(
+      E'أهلاً أستاذ %s، مع حضرتك إدارة منصة إعلاناتي 👋\nتم استلام رسالتك برقم المتابعة %s.\nيمكنك نشر إعلانك الأول مجاناً لمدة 7 أيام، أو الاشتراك في الباقة الاحترافية بـ 249 جنيه فقط (حتى 10 إعلانات + ظهور 30 يوم + تمييز نجمي) عبر فودافون كاش أو إنستاباي على رقم 01007008707.\nسيتابع معك فريق الإدارة فوراً على نفس التذكرة.',
+      v_name,
+      v_clean_code
+    );
+  END IF;
+
+  INSERT INTO public.elanati_support_messages (ticket_code, sender_role, sender_name, body)
+  VALUES (v_clean_code, 'admin', 'الرد الآلي — إدارة إعلاناتي', v_reply);
+END;
+$$;
+
 -- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
@@ -777,6 +893,8 @@ GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authe
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_messages(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_elanati_public_templates() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.send_elanati_internal_auto_reply(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_expired_elanati_ads() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO anon, authenticated;
 

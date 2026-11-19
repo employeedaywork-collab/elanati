@@ -3,11 +3,12 @@ import {
   Archive,
   Bot,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Eye,
   EyeOff,
   MessageCircle,
-  Play,
   RefreshCw,
   RotateCcw,
   Save,
@@ -20,6 +21,7 @@ import {
   fetchAutomationConfigAdmin,
   fetchWhatsAppLogsAdmin,
   findPendingAutomationTargetsAdmin,
+  markDirectWhatsAppSentAdmin,
   runAutomationNowAdmin,
   updateAutomationConfigAdmin,
 } from '../../services/dataService';
@@ -46,8 +48,9 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
   const [logs, setLogs] = useState<WhatsAppLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [running, setRunning] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [runningExternal, setRunningExternal] = useState(false);
+  const [showExternalPanel, setShowExternalPanel] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -79,7 +82,7 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
       const saved = await updateAutomationConfigAdmin(config);
       setConfig(saved);
       await loadAutomation();
-      setFeedback({ type: 'ok', text: 'تم حفظ إعدادات الأتمتة وقوالب الرسائل بنجاح' });
+      setFeedback({ type: 'ok', text: 'تم حفظ إعدادات الأتمتة والقوالب بنجاح' });
     } catch (err: any) {
       setFeedback({ type: 'err', text: err?.message || 'تعذر حفظ الإعدادات' });
     } finally {
@@ -107,8 +110,21 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     }
   };
 
-  const handleRunAllNow = async () => {
-    setRunning(true);
+  const handleDirectWhatsAppSend = async (target: AutomationTargetPreview) => {
+    try {
+      await markDirectWhatsAppSentAdmin(target);
+      await loadAutomation();
+      setFeedback({
+        type: 'ok',
+        text: `تم فتح واتساب وتسجيل التنبيه للعميل "${target.client_name}" في السجل`,
+      });
+    } catch {
+      // allow WhatsApp link to open regardless
+    }
+  };
+
+  const handleRunExternalNow = async () => {
+    setRunningExternal(true);
     setFeedback(null);
     try {
       await updateAutomationConfigAdmin(config);
@@ -118,7 +134,7 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     } catch (err: any) {
       setFeedback({ type: 'err', text: err?.message || 'تعذر تشغيل دورة الأتمتة' });
     } finally {
-      setRunning(false);
+      setRunningExternal(false);
     }
   };
 
@@ -136,7 +152,7 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     return (
       <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-3">
         <div className="w-8 h-8 border-2 border-blue-700 border-t-transparent rounded-full animate-spin mx-auto" />
-        <p className="text-sm font-bold text-slate-600">جاري تحميل مركز الأتمتة والواتساب...</p>
+        <p className="text-sm font-bold text-slate-600">جاري تحميل مركز الأتمتة والتنبيهات...</p>
       </div>
     );
   }
@@ -165,7 +181,7 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
         </div>
       )}
 
-      {/* Quick Control Cards */}
+      {/* Free In-Platform Automation Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
           <div className="flex items-start justify-between gap-3">
@@ -174,11 +190,16 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
                 <Archive className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="font-extrabold text-slate-900">
-                  إزالة الإعلانات المنتهية تلقائياً
-                </h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="font-extrabold text-slate-900">
+                    إزالة الإعلانات المنتهية تلقائياً
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
+                    مجاني داخل المنصة
+                  </span>
+                </div>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  أرشفة كل إعلان فور انتهاء موعد باقته أو اشتراكه المسجل على المنصة
+                  أرشفة وإخفاء كل إعلان فور انتهاء موعد باقته أو اشتراكه المسجل على المنصة
                 </p>
               </div>
             </div>
@@ -203,71 +224,57 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
               {archiving ? 'جاري الفحص والأرشفة...' : 'أرشفة الإعلانات المنتهية الآن'}
             </button>
             <span className="text-xs text-slate-500 font-semibold">
-              يتم الفحص يومياً بشكل آلي وعند فتح لوحة التحكم
+              يعمل تلقائياً بدون أي اشتراكات خارجية
             </span>
           </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-                <Bot className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="font-extrabold text-slate-900">
-                  أتمتة رسائل والرد التلقائي على واتساب
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  إرسال تذكير باسم المعلن وعنوان إعلانه والمشاهدات قبل انتهاء الباقة تلقائياً
-                </p>
-              </div>
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+              <Bot className="w-5 h-5" />
             </div>
-            <input
-              type="checkbox"
-              checked={config.auto_whatsapp_enabled}
-              onChange={(e) =>
-                setConfig({ ...config, auto_whatsapp_enabled: e.target.checked })
-              }
-              className="w-5 h-5 accent-emerald-600 cursor-pointer shrink-0 mt-1"
-            />
-          </div>
-
-          <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
-            <button
-              type="button"
-              disabled={running}
-              onClick={() => void handleRunAllNow()}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold transition-colors"
-            >
-              <Play className="w-4 h-4" />
-              {running ? 'جاري تشغيل الأتمتة...' : 'تشغيل الإرسال والأرشفة الآن'}
-            </button>
-
-            {config.last_run_at && (
-              <p className="text-[11px] text-slate-500 font-semibold">
-                آخر تشغيل: {new Date(config.last_run_at).toLocaleString('ar-EG')}
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-extrabold text-slate-900">
+                  التنبيهات والرد الآلي داخل المنصة
+                </h2>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
+                  مفعّل مجاناً
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                عند فتح العميل للموقع أو بوابة «متابعة اشتراكي» أو بدء محادثة في «تواصل مع الإدارة»، تقوم المنصة آلياً بعرض التنبيه والرد الفوري باسمه وعنوان إعلانه ومشاهداته مع أزرار الترقية والسداد.
               </p>
-            )}
+            </div>
           </div>
 
-          {config.last_run_summary && (
-            <p className="text-xs font-bold text-blue-800 bg-blue-50 border border-blue-100 rounded-xl px-3.5 py-2">
-              {config.last_run_summary}
-            </p>
-          )}
+          <div className="grid grid-cols-2 gap-2.5 text-xs pt-1">
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <p className="text-slate-500">العملاء المستحقون حالياً</p>
+              <p className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+                {targets.length} عميل
+              </p>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <p className="text-slate-500">رسائل السجل المسجلة</p>
+              <p className="text-lg font-extrabold text-emerald-700 tabular-nums mt-0.5">
+                {logs.length} رسالة
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* WhatsApp Provider & Timing Settings */}
+      {/* Timings & Message Templates */}
       <form onSubmit={handleSaveConfig} className="bg-white rounded-2xl border border-slate-200 p-6 space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
           <div className="flex items-center gap-2.5">
-            <MessageCircle className="w-5 h-5 text-emerald-600" />
+            <Sparkles className="w-5 h-5 text-amber-500" />
             <div>
-              <h3 className="font-extrabold text-slate-900">إعدادات ربط الواتساب ومواعيد التنبيه</h3>
+              <h3 className="font-extrabold text-slate-900">مواعيد التنبيه وصيغة الرسائل التلقائية</h3>
               <p className="text-xs text-slate-500">
-                اربط رقم واتساب المنصة لإرسال التنبيهات والردود التلقائية بأسماء العملاء مباشرة
+                تُستخدم هذه الصيغ في تنبيهات المنصة، الرد التلقائي، وزر الإرسال المباشر عبر واتساب
               </p>
             </div>
           </div>
@@ -278,11 +285,11 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-bold transition-colors"
           >
             <Save className="w-4 h-4" />
-            {saving ? 'جاري الحفظ...' : 'حفظ جميع الإعدادات'}
+            {saving ? 'جاري الحفظ...' : 'حفظ المواعيد والقوالب'}
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
               تنبيه الإعلان المجاني قبل الانتهاء بـ (ساعة)
@@ -320,74 +327,10 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
               className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              طريقة ربط الواتساب
-            </label>
-            <select
-              value={config.whatsapp_provider}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  whatsapp_provider: e.target.value as WhatsAppProvider,
-                })
-              }
-              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm bg-white outline-none focus:ring-2 focus:ring-blue-600"
-            >
-              <option value="ultramsg">ربط رقم واتساب مباشر (UltraMsg)</option>
-              <option value="meta_cloud">واتساب للأعمال الرسمي (Meta)</option>
-              <option value="webhook">بوابة ربط خارجية</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              معرّف الاتصال أو رابط البوابة
-            </label>
-            <input
-              type="text"
-              dir="ltr"
-              value={config.whatsapp_endpoint}
-              onChange={(e) => setConfig({ ...config, whatsapp_endpoint: e.target.value })}
-              placeholder={
-                config.whatsapp_provider === 'ultramsg'
-                  ? 'instance12345'
-                  : config.whatsapp_provider === 'meta_cloud'
-                  ? 'Phone Number ID'
-                  : 'https://...'
-              }
-              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-left outline-none focus:ring-2 focus:ring-blue-600"
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-bold text-slate-700 mb-1.5">
-            رمز الأمان الخاص بالربط
-          </label>
-          <div className="relative max-w-xl">
-            <input
-              type={showToken ? 'text' : 'password'}
-              dir="ltr"
-              value={config.whatsapp_token}
-              onChange={(e) => setConfig({ ...config, whatsapp_token: e.target.value })}
-              placeholder="أدخل مفتاح أو رمز الحماية الخاص بمزود الواتساب"
-              className="w-full pl-11 pr-4 py-2.5 border border-slate-200 rounded-xl text-xs text-left outline-none focus:ring-2 focus:ring-blue-600"
-            />
-            <button
-              type="button"
-              onClick={() => setShowToken((v) => !v)}
-              aria-label="إظهار أو إخفاء الرمز"
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-            >
-              {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
         </div>
 
         {/* Templates */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 pt-2">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 pt-1">
           <div className="space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
@@ -480,15 +423,15 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
         </div>
       </form>
 
-      {/* Due Customers Preview Queue */}
+      {/* Due Customers Preview Queue (Zero-Cost 1-Click Send) */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="font-extrabold text-slate-900">
               قائمة العملاء المستحق تنبيههم الآن ({targets.length})
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              تُعرض هنا الأسماء وعناوين الإعلانات والمشاهدات المسجلة لكل عميل قبل انتهاء الموعد
+              اضغط على «إرسال مباشر عبر واتساب» لفتح المحادثة بالرسالة جاهزة باسم العميل مجاناً وتوثيقها في السجل
             </p>
           </div>
         </div>
@@ -544,10 +487,11 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
                     href={t.whatsapp_direct_url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={() => void handleDirectWhatsAppSend(t)}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors shrink-0"
                   >
                     <Send className="w-3.5 h-3.5" />
-                    إرسال مباشر عبر واتساب
+                    إرسال مباشر عبر واتساب (مجاني)
                   </a>
                 </div>
 
@@ -560,16 +504,139 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
         )}
       </div>
 
+      {/* Optional External WhatsApp Automation (Collapsed by Default) */}
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowExternalPanel((v) => !v)}
+          className="w-full px-6 py-4 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors text-right"
+        >
+          <div className="flex items-center gap-2.5">
+            <MessageCircle className="w-5 h-5 text-slate-600" />
+            <div>
+              <h3 className="font-extrabold text-sm text-slate-900">
+                الربط الخارجي التلقائي للواتساب (اختياري مستقبلاً)
+              </h3>
+              <p className="text-xs text-slate-500">
+                تجهيز الربط الآلي مع بوابة إرسال خارجية عند الرغبة في تفعيله لاحقاً
+              </p>
+            </div>
+          </div>
+          {showExternalPanel ? (
+            <ChevronUp className="w-5 h-5 text-slate-500 shrink-0" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-slate-500 shrink-0" />
+          )}
+        </button>
+
+        {showExternalPanel && (
+          <div className="p-6 pt-2 border-t border-slate-100 space-y-4">
+            <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+              <span className="text-xs font-bold text-slate-800">
+                تفعيل الإرسال الآلي في الخلفية عبر مزود واتساب خارجي
+              </span>
+              <input
+                type="checkbox"
+                checked={config.auto_whatsapp_enabled}
+                onChange={(e) =>
+                  setConfig({ ...config, auto_whatsapp_enabled: e.target.checked })
+                }
+                className="w-4 h-4 accent-emerald-600"
+              />
+            </label>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  مزود الربط
+                </label>
+                <select
+                  value={config.whatsapp_provider}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      whatsapp_provider: e.target.value as WhatsAppProvider,
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm bg-white outline-none"
+                >
+                  <option value="meta_cloud">واتساب للأعمال الرسمي</option>
+                  <option value="ultramsg">ربط رقم واتساب مباشر</option>
+                  <option value="webhook">بوابة ربط خارجية</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  معرّف الاتصال أو رابط البوابة
+                </label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={config.whatsapp_endpoint}
+                  onChange={(e) => setConfig({ ...config, whatsapp_endpoint: e.target.value })}
+                  placeholder="معرّف الاتصال أو الرابط"
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-left outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  رمز الأمان الخاص بالربط
+                </label>
+                <div className="relative">
+                  <input
+                    type={showToken ? 'text' : 'password'}
+                    dir="ltr"
+                    value={config.whatsapp_token}
+                    onChange={(e) => setConfig({ ...config, whatsapp_token: e.target.value })}
+                    placeholder="رمز الحماية"
+                    className="w-full pl-10 pr-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-left outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken((v) => !v)}
+                    aria-label="إظهار أو إخفاء الرمز"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void handleSaveConfig()}
+                className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold"
+              >
+                حفظ إعدادات الربط الخارجي
+              </button>
+              <button
+                type="button"
+                disabled={runningExternal}
+                onClick={() => void handleRunExternalNow()}
+                className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-bold"
+              >
+                {runningExternal ? 'جاري التشغيل...' : 'تشغيل اختبار الربط الخارجي الآن'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* WhatsApp Logs Table */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <h3 className="font-extrabold text-slate-900">
-            سجل التنبيهات والردود التلقائية ({logs.length})
+            سجل التنبيهات والردود ({logs.length})
           </h3>
         </div>
         {logs.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">
-            لم يتم تسجيل رسائل واتساب تلقائية بعد.
+            لم يتم تسجيل تنبيهات مرسلة بعد.
           </div>
         ) : (
           <div className="overflow-x-auto">

@@ -615,6 +615,16 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
     });
     if (threadErr) throw new Error(threadErr.message);
 
+    try {
+      await supabase.rpc('send_elanati_internal_auto_reply', {
+        p_ticket_code: ticket.ticket_code,
+        p_client_name: ticket.name,
+        p_client_phone: ticket.phone || null,
+      });
+    } catch {
+      // ignore if function not yet created
+    }
+
     return ticket;
   }
 
@@ -622,7 +632,50 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
   writeLocal(STORAGE_KEYS.messages, [ticket, ...msgs]);
 
   const support = readLocal<SupportMessage[]>(STORAGE_KEYS.support, []);
-  writeLocal(STORAGE_KEYS.support, [...support, initialThreadMsg]);
+  const nextSupport: SupportMessage[] = [...support, initialThreadMsg];
+
+  // Local automatic intelligent reply inside the platform ($0 external cost)
+  try {
+    const portal = input.phone ? await fetchClientPortal(input.phone) : { subscription: null, ads: [] };
+    const cfg = await fetchAutomationConfigAdmin();
+    const matchedSub = portal.subscription;
+    const matchedAd = portal.ads[0];
+    const clientName = matchedAd?.client_name || matchedSub?.client_name || ticket.name || 'عميلنا العزيز';
+
+    let autoBody = '';
+    if (matchedSub && matchedSub.status === 'activated' && matchedSub.expires_at) {
+      const remDays = Math.max(1, getRemainingDays(matchedSub.expires_at) || 1);
+      autoBody = renderWhatsAppTemplate(cfg.paid_expiry_template, {
+        الاسم: clientName,
+        الباقة: matchedSub.package_name,
+        كود_الاشتراك: matchedSub.subscription_code || '-',
+        الأيام_المتبقية: remDays,
+        تاريخ_الانتهاء: matchedSub.expires_at.split('T')[0],
+      });
+    } else if (matchedAd) {
+      autoBody = renderWhatsAppTemplate(cfg.free_expiry_template, {
+        الاسم: clientName,
+        عنوان_الإعلان: matchedAd.title,
+        المشاهدات: matchedAd.views_count || 0,
+        تاريخ_الانتهاء: matchedAd.expires_at ? matchedAd.expires_at.split('T')[0] : 'دائم',
+      });
+    } else {
+      autoBody = `أهلاً أستاذ ${clientName}، مع حضرتك إدارة منصة إعلاناتي 👋\nتم استلام رسالتك برقم المتابعة ${ticket.ticket_code}.\nيمكنك نشر إعلانك الأول مجاناً لمدة 7 أيام، أو الاشتراك في الباقة الاحترافية بـ 249 جنيه فقط (حتى 10 إعلانات + ظهور 30 يوم + تمييز نجمي) عبر فودافون كاش أو إنستاباي على رقم 01007008707.\nسيتابع معك فريق الإدارة فوراً على نفس المحادثة.`;
+    }
+
+    nextSupport.push({
+      id: generateId('sm'),
+      ticket_code: ticket.ticket_code,
+      sender_role: 'admin',
+      sender_name: 'الرد الآلي — إدارة إعلاناتي',
+      body: autoBody,
+      created_at: new Date(Date.now() + 500).toISOString(),
+    });
+  } catch {
+    // ignore
+  }
+
+  writeLocal(STORAGE_KEYS.support, nextSupport);
 
   return ticket;
 }
@@ -1515,4 +1568,68 @@ export async function runAutomationNowAdmin(): Promise<AutomationRunResult> {
     skippedCount: targets.length - dueTargets.length,
     summary,
   };
+}
+
+export async function fetchPublicAutomationTemplates(): Promise<{
+  free_reminder_hours_before: number;
+  paid_reminder_days_before: number;
+  free_expiry_template: string;
+  paid_expiry_template: string;
+}> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('get_elanati_public_templates');
+      if (!error && data) {
+        return {
+          free_reminder_hours_before: data.free_reminder_hours_before || 48,
+          paid_reminder_days_before: data.paid_reminder_days_before || 7,
+          free_expiry_template:
+            data.free_expiry_template || DEFAULT_AUTOMATION_CONFIG.free_expiry_template,
+          paid_expiry_template:
+            data.paid_expiry_template || DEFAULT_AUTOMATION_CONFIG.paid_expiry_template,
+        };
+      }
+    } catch {
+      // fallback
+    }
+  }
+  const localCfg = readLocal<Partial<AutomationConfig>>(
+    STORAGE_KEYS.automationConfig,
+    DEFAULT_AUTOMATION_CONFIG
+  );
+  return {
+    free_reminder_hours_before: localCfg.free_reminder_hours_before || 48,
+    paid_reminder_days_before: localCfg.paid_reminder_days_before || 7,
+    free_expiry_template:
+      localCfg.free_expiry_template || DEFAULT_AUTOMATION_CONFIG.free_expiry_template,
+    paid_expiry_template:
+      localCfg.paid_expiry_template || DEFAULT_AUTOMATION_CONFIG.paid_expiry_template,
+  };
+}
+
+export async function markDirectWhatsAppSentAdmin(target: AutomationTargetPreview): Promise<void> {
+  const entry = {
+    target_type: target.target_type,
+    target_id: target.target_id,
+    target_expires_at: target.target_expires_at,
+    client_name: target.client_name,
+    client_phone: target.client_phone,
+    message_body: target.message_body,
+    delivery_status: 'sent' as const,
+    provider_response: 'إرسال مباشر مجاني من لوحة المدير',
+  };
+
+  if (supabase) {
+    const { error } = await supabase.from('elanati_whatsapp_logs').insert(entry);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const existingLogs = readLocal<WhatsAppLog[]>(STORAGE_KEYS.whatsappLogs, []);
+  const localLog: WhatsAppLog = {
+    id: generateId('wa'),
+    ...entry,
+    sent_at: new Date().toISOString(),
+  };
+  writeLocal(STORAGE_KEYS.whatsappLogs, [localLog, ...existingLogs]);
 }

@@ -16,7 +16,13 @@ import {
   X,
 } from 'lucide-react';
 import { formatWhatsAppLink } from '../lib/supabase';
-import { fetchClientPortal, getRemainingDays, isAdExpired } from '../services/dataService';
+import {
+  fetchClientPortal,
+  fetchPublicAutomationTemplates,
+  getRemainingDays,
+  isAdExpired,
+  renderWhatsAppTemplate,
+} from '../services/dataService';
 import { Ad, ClientPortalData, PackageRequest, SiteSettings } from '../types';
 
 interface ClientSubscriptionModalProps {
@@ -99,6 +105,12 @@ export default function ClientSubscriptionModal({
   const [searched, setSearched] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [copiedKey, setCopiedKey] = useState(false);
+  const [templates, setTemplates] = useState<{
+    free_reminder_hours_before: number;
+    paid_reminder_days_before: number;
+    free_expiry_template: string;
+    paid_expiry_template: string;
+  } | null>(null);
 
   // Live countdown ticker (1 second)
   useEffect(() => {
@@ -112,8 +124,12 @@ export default function ClientSubscriptionModal({
     setLoading(true);
     setSearched(true);
     try {
-      const data = await fetchClientPortal(clean);
+      const [data, tpl] = await Promise.all([
+        fetchClientPortal(clean),
+        fetchPublicAutomationTemplates(),
+      ]);
       setPortal(data);
+      setTemplates(tpl);
     } finally {
       setLoading(false);
     }
@@ -141,6 +157,34 @@ export default function ClientSubscriptionModal({
   const isPaidActive = sub?.status === 'activated' && !countdown?.expired;
   const isEnterprise = sub?.package_name === 'المؤسسي';
   const maxQuota = sub ? (isEnterprise ? 'غير محدود' : sub.max_ads || 10) : 1;
+
+  // Automatic personalized in-platform reminder message when approaching expiry
+  let inPlatformAlert: string | null = null;
+  if (templates) {
+    if (sub && sub.status === 'activated' && sub.expires_at && !countdown?.expired) {
+      const remMs = new Date(sub.expires_at).getTime() - nowMs;
+      if (remMs > 0 && remMs <= templates.paid_reminder_days_before * 24 * 60 * 60 * 1000) {
+        const remDays = Math.max(1, Math.ceil(remMs / (1000 * 60 * 60 * 24)));
+        inPlatformAlert = renderWhatsAppTemplate(templates.paid_expiry_template, {
+          الاسم: sub.client_name || 'عميلنا العزيز',
+          الباقة: sub.package_name,
+          كود_الاشتراك: sub.subscription_code || '-',
+          الأيام_المتبقية: remDays,
+          تاريخ_الانتهاء: sub.expires_at.split('T')[0],
+        });
+      }
+    } else if (!sub && latestFreeAd && latestFreeAd.expires_at) {
+      const remMs = new Date(latestFreeAd.expires_at).getTime() - nowMs;
+      if (remMs > 0 && remMs <= templates.free_reminder_hours_before * 60 * 60 * 1000) {
+        inPlatformAlert = renderWhatsAppTemplate(templates.free_expiry_template, {
+          الاسم: latestFreeAd.client_name || 'عميلنا العزيز',
+          عنوان_الإعلان: latestFreeAd.title,
+          المشاهدات: latestFreeAd.views_count || 0,
+          تاريخ_الانتهاء: latestFreeAd.expires_at.split('T')[0],
+        });
+      }
+    }
+  }
 
   const handleExportReport = () => {
     if (ads.length === 0) return;
@@ -249,6 +293,30 @@ export default function ClientSubscriptionModal({
 
           {(sub || isFreeFallback) && (
             <div className="space-y-6">
+              {inPlatformAlert && (
+                <div className="rounded-2xl bg-amber-50 border border-amber-200 p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-extrabold text-sm text-amber-900 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-600" />
+                      تنبيه تلقائي لحسابك من منصة إعلاناتي
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onUpgrade();
+                      }}
+                      className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold transition-colors"
+                    >
+                      {sub ? 'تجديد الاشتراك الآن' : 'ترقية للباقة الاحترافية (249 ج.م)'}
+                    </button>
+                  </div>
+                  <p className="whitespace-pre-line text-xs text-slate-800 leading-relaxed bg-white/80 rounded-xl p-3.5 border border-amber-200/70">
+                    {inPlatformAlert}
+                  </p>
+                </div>
+              )}
+
               {/* Subscription Overview + Countdown Card */}
               <div className="rounded-3xl bg-slate-900 text-white p-6 space-y-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">

@@ -71,18 +71,23 @@ export default function AddAdForm({
 
   useEffect(() => {
     const cleanPhone = formData.contact.replace(/\D/g, '');
+    const cleanName = formData.client_name.trim();
     const cleanCode = formData.subscription_code.trim();
-    if (cleanPhone.length < 10 && !cleanCode) {
+    if (cleanPhone.length < 10 && cleanName.length < 2 && !cleanCode) {
       setAllowance(null);
       return;
     }
 
     const timer = setTimeout(() => {
-      void checkAdAllowance(formData.contact, formData.subscription_code).then(setAllowance);
+      void checkAdAllowance(
+        formData.contact,
+        formData.subscription_code,
+        formData.client_name
+      ).then(setAllowance);
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [formData.contact, formData.subscription_code]);
+  }, [formData.contact, formData.subscription_code, formData.client_name]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -201,14 +206,22 @@ export default function AddAdForm({
                   </p>
                   {!allowance.allowed && (
                     <div className="pt-1.5 flex items-center justify-between gap-2 text-red-700 font-bold">
-                      <span>وصلت للحد الأقصى في باقتك الحالية.</span>
+                      <span>
+                        {allowance.package_name === 'مجاني' && allowance.free_trial_used
+                          ? allowance.free_block_reason === 'both'
+                            ? 'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم واسم المعلن (المجاني مرة واحدة فقط).'
+                            : allowance.free_block_reason === 'name'
+                            ? 'اسم المعلن هذا استخدم الإعلان المجاني مسبقاً (المجاني مرة واحدة فقط).'
+                            : 'رقم الموبايل هذا استخدم الإعلان المجاني مسبقاً (المجاني مرة واحدة فقط).'
+                          : 'وصلت للحد الأقصى في باقتك الحالية.'}
+                      </span>
                       <button
                         type="button"
                         onClick={() => {
                           onClose();
                           onUpgrade();
                         }}
-                        className="px-3 py-1 rounded-lg bg-amber-400 text-slate-950 font-extrabold"
+                        className="px-3 py-1 rounded-lg bg-amber-400 text-slate-950 font-extrabold whitespace-nowrap shrink-0"
                       >
                         ترقية الباقة
                       </button>
@@ -217,7 +230,7 @@ export default function AddAdForm({
                 </div>
               ) : (
                 <p>
-                  <strong>الباقة المجانية:</strong> إعلان واحد فقط يظهر لمدة{' '}
+                  <strong>الباقة المجانية:</strong> إعلان واحد فقط <strong>مرة واحدة</strong> لكل رقم موبايل أو اسم معلن، يظهر لمدة{' '}
                   <strong>{settings.free_ad_days || 7} أيام</strong> ويختفي تلقائياً بعد انتهاء الأسبوع.
                   للمزيد من الإعلانات والظهور المميز أدخل كود اشتراكك أو اختر باقة.
                 </p>

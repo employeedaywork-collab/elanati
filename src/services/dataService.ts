@@ -83,6 +83,10 @@ export function normalizeDigits(phone: string): string {
   return phone.replace(/\D/g, '');
 }
 
+export function normalizeClientName(name?: string | null): string {
+  return (name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function normalizePhoneToWhatsApp(phone: string): string {
   const digits = normalizeDigits(phone);
   if (digits.startsWith('01') && digits.length === 11) {
@@ -348,7 +352,8 @@ export async function deleteCategoryAdmin(id: string): Promise<void> {
 // ============================================================================
 export async function checkAdAllowance(
   contact: string,
-  subscriptionCode?: string
+  subscriptionCode?: string,
+  clientName?: string
 ): Promise<AdAllowance> {
   const settings = await fetchSiteSettings();
   const freeDays = Math.max(1, settings.free_ad_days || 7);
@@ -358,6 +363,7 @@ export async function checkAdAllowance(
     const { data, error } = await supabase.rpc('check_elanati_ad_allowance', {
       p_contact: contact,
       p_subscription_code: subscriptionCode || null,
+      p_client_name: clientName?.trim() || null,
     });
     if (!error && data) {
       return data as AdAllowance;
@@ -365,6 +371,7 @@ export async function checkAdAllowance(
   }
 
   const digits = normalizeDigits(contact);
+  const normalizedName = normalizeClientName(clientName);
   const cleanCode = (subscriptionCode || '').trim().toUpperCase();
   const requests = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
   const activeSub = requests.find(
@@ -401,21 +408,48 @@ export async function checkAdAllowance(
       priority_rank: isEnterprise ? 2 : 1,
       allow_extra_images: true,
       allow_banner: isEnterprise,
+      free_trial_used: false,
+      free_block_reason: null,
     };
   }
 
+  // Free plan is strictly once only per mobile number OR advertiser name (across active & expired/archived non-rejected ads)
+  const usedByPhone = Boolean(
+    digits &&
+      ads.some(
+        (a) =>
+          (a.package_name || 'مجاني') === 'مجاني' &&
+          a.status !== 'rejected' &&
+          normalizeDigits(a.contact) === digits
+      )
+  );
+  const usedByName = Boolean(
+    normalizedName &&
+      ads.some(
+        (a) =>
+          (a.package_name || 'مجاني') === 'مجاني' &&
+          a.status !== 'rejected' &&
+          normalizeClientName(a.client_name) === normalizedName
+      )
+  );
+  const freeTrialUsed = usedByPhone || usedByName;
+  const blockReason: AdAllowance['free_block_reason'] =
+    usedByPhone && usedByName ? 'both' : usedByPhone ? 'phone' : usedByName ? 'name' : null;
+
   return {
-    allowed: activeClientAds.length < 1,
+    allowed: !freeTrialUsed,
     package_name: 'مجاني',
     subscription_code: null,
     max_ads: 1,
-    used_ads: activeClientAds.length,
+    used_ads: freeTrialUsed ? Math.max(activeClientAds.length, 1) : 0,
     duration_days: freeDays,
     is_permanent: false,
     featured: false,
     priority_rank: 0,
     allow_extra_images: false,
     allow_banner: false,
+    free_trial_used: freeTrialUsed,
+    free_block_reason: blockReason,
   };
 }
 
@@ -550,11 +584,21 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
 
   let allowance: AdAllowance | null = null;
   if (!input.asAdmin) {
-    allowance = await checkAdAllowance(input.contact, input.subscription_code);
+    allowance = await checkAdAllowance(input.contact, input.subscription_code, input.client_name);
     if (!allowance.allowed) {
       if (allowance.package_name === 'مجاني') {
+        if (allowance.free_block_reason === 'both') {
+          throw new Error(
+            'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم واسم المعلن. الباقة المجانية متاحة لمرة واحدة فقط، يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
+          );
+        }
+        if (allowance.free_block_reason === 'name') {
+          throw new Error(
+            'اسم المعلن هذا استخدم الإعلان المجاني من قبل. الباقة المجانية متاحة لمرة واحدة فقط، يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
+          );
+        }
         throw new Error(
-          'الباقة المجانية تسمح بإعلان واحد فقط نشط لكل رقم هاتف. يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة المزيد من الإعلانات.'
+          'رقم الموبايل هذا استخدم الإعلان المجاني من قبل. الباقة المجانية متاحة لمرة واحدة فقط، يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
         );
       }
       throw new Error(

@@ -499,10 +499,14 @@ BEGIN
 END;
 $$;
 
--- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد
+-- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد (المجاني مرة واحدة فقط لكل رقم موبايل أو اسم معلن)
+DROP FUNCTION IF EXISTS public.check_elanati_ad_allowance(text, text);
+DROP FUNCTION IF EXISTS public.check_elanati_ad_allowance(text, text, text);
+
 CREATE OR REPLACE FUNCTION public.check_elanati_ad_allowance(
   p_contact text,
-  p_subscription_code text DEFAULT NULL
+  p_subscription_code text DEFAULT NULL,
+  p_client_name text DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -513,8 +517,11 @@ AS $$
 DECLARE
   v_digits text := regexp_replace(COALESCE(p_contact, ''), '\D', '', 'g');
   v_code text := upper(trim(COALESCE(p_subscription_code, '')));
+  v_client_name text := lower(regexp_replace(trim(COALESCE(p_client_name, '')), '\s+', ' ', 'g'));
   v_sub record;
   v_active_ads integer := 0;
+  v_free_used_phone boolean := false;
+  v_free_used_name boolean := false;
   v_free_days integer := 7;
   v_pro_days integer := 30;
 BEGIN
@@ -561,25 +568,98 @@ BEGIN
       'featured', true,
       'priority_rank', CASE WHEN v_sub.package_name = 'المؤسسي' THEN 2 ELSE 1 END,
       'allow_extra_images', true,
-      'allow_banner', v_sub.package_name = 'المؤسسي'
+      'allow_banner', v_sub.package_name = 'المؤسسي',
+      'free_trial_used', false,
+      'free_block_reason', NULL
     );
   END IF;
 
+  -- الباقة المجانية مرة واحدة فقط طوال الوقت لكل رقم موبايل أو اسم معلن (حتى لو انتهى الإعلان السابق أو تمت أرشفته)
+  IF v_digits <> '' THEN
+    SELECT EXISTS (
+      SELECT 1
+      FROM public.elanati_ads a
+      WHERE a.package_name = 'مجاني'
+        AND a.status <> 'rejected'
+        AND regexp_replace(a.contact, '\D', '', 'g') = v_digits
+    ) INTO v_free_used_phone;
+  END IF;
+
+  IF v_client_name <> '' THEN
+    SELECT EXISTS (
+      SELECT 1
+      FROM public.elanati_ads a
+      WHERE a.package_name = 'مجاني'
+        AND a.status <> 'rejected'
+        AND lower(regexp_replace(trim(COALESCE(a.client_name, '')), '\s+', ' ', 'g')) = v_client_name
+    ) INTO v_free_used_name;
+  END IF;
+
   RETURN jsonb_build_object(
-    'allowed', v_active_ads < 1,
+    'allowed', NOT (v_free_used_phone OR v_free_used_name),
     'package_name', 'مجاني',
     'subscription_code', NULL,
     'max_ads', 1,
-    'used_ads', v_active_ads,
+    'used_ads', CASE WHEN (v_free_used_phone OR v_free_used_name) THEN GREATEST(v_active_ads, 1) ELSE 0 END,
     'duration_days', v_free_days,
     'is_permanent', false,
     'featured', false,
     'priority_rank', 0,
     'allow_extra_images', false,
-    'allow_banner', false
+    'allow_banner', false,
+    'free_trial_used', (v_free_used_phone OR v_free_used_name),
+    'free_block_reason', CASE
+      WHEN v_free_used_phone AND v_free_used_name THEN 'both'
+      WHEN v_free_used_phone THEN 'phone'
+      WHEN v_free_used_name THEN 'name'
+      ELSE NULL
+    END
   );
 END;
 $$;
+
+-- حماية إضافية على مستوى قاعدة البيانات لمنع تكرار الإعلان المجاني لنفس رقم الموبايل أو اسم المعلن
+CREATE OR REPLACE FUNCTION public.enforce_elanati_single_free_ad()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_digits text := regexp_replace(COALESCE(NEW.contact, ''), '\D', '', 'g');
+  v_client_name text := lower(regexp_replace(trim(COALESCE(NEW.client_name, '')), '\s+', ' ', 'g'));
+BEGIN
+  IF NEW.package_name = 'مجاني' AND NOT public.is_elanati_admin() THEN
+    IF v_digits <> '' AND EXISTS (
+      SELECT 1
+      FROM public.elanati_ads a
+      WHERE a.package_name = 'مجاني'
+        AND a.status <> 'rejected'
+        AND regexp_replace(a.contact, '\D', '', 'g') = v_digits
+    ) THEN
+      RAISE EXCEPTION 'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم. الباقة المجانية متاحة لمرة واحدة فقط، يرجى الترقية إلى إحدى الباقات المدفوعة.';
+    END IF;
+
+    IF v_client_name <> '' AND EXISTS (
+      SELECT 1
+      FROM public.elanati_ads a
+      WHERE a.package_name = 'مجاني'
+        AND a.status <> 'rejected'
+        AND lower(regexp_replace(trim(COALESCE(a.client_name, '')), '\s+', ' ', 'g')) = v_client_name
+    ) THEN
+      RAISE EXCEPTION 'اسم المعلن هذا استخدم الإعلان المجاني مسبقاً. الباقة المجانية متاحة لمرة واحدة فقط، يرجى الترقية إلى إحدى الباقات المدفوعة.';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_elanati_single_free_ad ON public.elanati_ads;
+CREATE TRIGGER trg_elanati_single_free_ad
+  BEFORE INSERT ON public.elanati_ads
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_elanati_single_free_ad();
 
 -- ============================================================================
 -- البيانات الأولية (Seed Data)
@@ -944,7 +1024,7 @@ GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authe
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_messages(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_public_templates() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.send_elanati_internal_auto_reply(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_expired_elanati_ads() TO authenticated, service_role;

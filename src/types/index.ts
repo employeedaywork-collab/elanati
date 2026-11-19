@@ -155,6 +155,8 @@ export interface AdAllowance {
   priority_rank: number;
   allow_extra_images: boolean;
   allow_banner: boolean;
+  free_trial_used?: boolean;
+  free_block_reason?: 'phone' | 'name' | 'both' | null;
 }
 
 export interface ClientPortalData {

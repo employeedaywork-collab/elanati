@@ -28,6 +28,7 @@ import {
   fetchPublicAutomationTemplates,
   fetchSiteSettings,
   fetchTestimonials,
+  getAdminSession,
   incrementAdViews,
   renderWhatsAppTemplate,
 } from '../services/dataService';
@@ -61,19 +62,23 @@ export default function HomePage() {
     message: string;
     isPaid: boolean;
   } | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
-      const [loadedSettings, loadedAds, loadedPackages, loadedTestimonials] = await Promise.all([
-        fetchSiteSettings(),
-        fetchPublicAds(),
-        fetchPackages(),
-        fetchTestimonials(false),
-      ]);
+      const [loadedSettings, loadedAds, loadedPackages, loadedTestimonials, adminSess] =
+        await Promise.all([
+          fetchSiteSettings(),
+          fetchPublicAds(),
+          fetchPackages(),
+          fetchTestimonials(false),
+          getAdminSession().catch(() => null),
+        ]);
       setSettings(loadedSettings);
       setAds(loadedAds);
       setPackages(loadedPackages);
       setTestimonials(loadedTestimonials);
+      setIsAdmin(Boolean(adminSess));
     } finally {
       setLoadingAds(false);
     }
@@ -216,6 +221,7 @@ export default function HomePage() {
     <div className="min-h-screen bg-white text-slate-900">
       <Navbar
         siteName={settings.site_name}
+        isAdmin={isAdmin}
         onAddAd={handleOpenAddAd}
         onOpenPortal={() => handleOpenPortal()}
       />

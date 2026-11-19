@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { AdCategory, SiteSettings } from '../types';
 
@@ -133,7 +132,7 @@ export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPort
             </div>
 
             <div>
-              <h4 className="font-bold text-base mb-4">الدعم والإدارة</h4>
+              <h4 className="font-bold text-base mb-4">الدعم والمساعدة</h4>
               <ul className="space-y-2.5 text-sm">
                 <li>
                   <a href="#contact" className="text-slate-400 hover:text-white transition-colors">
@@ -166,11 +165,6 @@ export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPort
                   >
                     الشروط والأحكام
                   </button>
-                </li>
-                <li>
-                  <Link to="/admin" className="text-amber-400 hover:text-amber-300 font-bold transition-colors">
-                    دخول لوحة تحكم المدير
-                  </Link>
                 </li>
               </ul>
             </div>

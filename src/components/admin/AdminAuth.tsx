@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Lock, ShieldCheck } from 'lucide-react';
-import { signInAdmin, signUpFirstAdmin } from '../../services/dataService';
+import { signInAdmin } from '../../services/dataService';
 import { AdminSession } from '../../types';
 
 interface AdminAuthProps {
@@ -9,33 +9,18 @@ interface AdminAuthProps {
 }
 
 export default function AdminAuth({ onSuccess }: AdminAuthProps) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('employeedaywork@gmail.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setInfo('');
     setLoading(true);
     try {
-      if (mode === 'login') {
-        const session = await signInAdmin(email, password);
-        onSuccess(session);
-      } else {
-        const res = await signUpFirstAdmin(email, password);
-        if (res.needsEmailConfirmation) {
-          setInfo(
-            'تم إنشاء الحساب بنجاح. تحقق من بريدك الإلكتروني لتأكيد الحساب ثم قم بتسجيل الدخول.'
-          );
-          setMode('login');
-        } else if (res.session) {
-          onSuccess(res.session);
-        }
-      }
+      const session = await signInAdmin(email, password);
+      onSuccess(session);
     } catch (err: any) {
       setError(err?.message || 'تعذر تسجيل الدخول');
     } finally {
@@ -75,12 +60,6 @@ export default function AdminAuth({ onSuccess }: AdminAuthProps) {
           </div>
         )}
 
-        {info && (
-          <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium">
-            {info}
-          </div>
-        )}
-
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-bold text-slate-700 mb-1.5">
@@ -91,6 +70,7 @@ export default function AdminAuth({ onSuccess }: AdminAuthProps) {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
               className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none text-left"
               dir="ltr"
             />
@@ -118,28 +98,9 @@ export default function AdminAuth({ onSuccess }: AdminAuthProps) {
             disabled={loading}
             className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white py-3.5 rounded-xl font-bold text-sm transition-colors"
           >
-            {loading
-              ? 'جاري التحقق...'
-              : mode === 'login'
-              ? 'تسجيل الدخول للوحة المدير'
-              : 'إنشاء حساب المدير لأول مرة'}
+            {loading ? 'جاري التحقق...' : 'تسجيل الدخول للوحة المدير'}
           </button>
         </form>
-
-        <div className="mt-5 pt-4 border-t border-slate-100 text-center">
-          <button
-            type="button"
-            onClick={() => {
-              setMode(mode === 'login' ? 'register' : 'login');
-              setError('');
-            }}
-            className="text-xs font-bold text-blue-700 hover:text-blue-900"
-          >
-            {mode === 'login'
-              ? 'أول مرة تدخل؟ أنشئ كلمة مرور لبريد المدير المسجل'
-              : 'لديك حساب بالفعل؟ تسجيل الدخول'}
-          </button>
-        </div>
       </div>
     </div>
   );

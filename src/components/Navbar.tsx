@@ -4,11 +4,12 @@ import { Clock, Menu, X } from 'lucide-react';
 
 interface NavbarProps {
   siteName: string;
+  isAdmin?: boolean;
   onAddAd: () => void;
   onOpenPortal: () => void;
 }
 
-export default function Navbar({ siteName, onAddAd, onOpenPortal }: NavbarProps) {
+export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPortal }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -53,12 +54,14 @@ export default function Navbar({ siteName, onAddAd, onOpenPortal }: NavbarProps)
             >
               تواصل معنا
             </a>
-            <Link
-              to="/admin"
-              className="text-slate-700 hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              لوحة المدير
-            </Link>
+            {isAdmin && (
+              <Link
+                to="/admin"
+                className="text-blue-700 font-bold hover:text-blue-800 transition-colors whitespace-nowrap shrink-0"
+              >
+                لوحة المدير
+              </Link>
+            )}
           </nav>
 
           <div className="hidden md:flex items-center gap-2.5 shrink-0">
@@ -127,13 +130,15 @@ export default function Navbar({ siteName, onAddAd, onOpenPortal }: NavbarProps)
               >
                 تواصل معنا
               </a>
-              <Link
-                to="/admin"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                لوحة المدير
-              </Link>
+              {isAdmin && (
+                <Link
+                  to="/admin"
+                  onClick={() => setIsOpen(false)}
+                  className="text-blue-700 font-bold px-3 py-2.5 rounded-lg hover:bg-blue-50"
+                >
+                  لوحة المدير
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => {

@@ -4,6 +4,7 @@ export type PaymentMethod = 'vodafone_cash' | 'instapay' | 'bank_transfer';
 
 export interface Ad {
   id: string;
+  client_name?: string | null;
   title: string;
   category: AdCategory;
   description: string;
@@ -137,6 +138,7 @@ export interface AdAllowance {
   allowed: boolean;
   package_name: string;
   subscription_code?: string | null;
+  subscription_expires_at?: string | null;
   max_ads: number;
   used_ads: number;
   duration_days: number | null;
@@ -150,4 +152,58 @@ export interface AdAllowance {
 export interface ClientPortalData {
   subscription: PackageRequest | null;
   ads: Ad[];
+}
+
+export type WhatsAppProvider = 'ultramsg' | 'meta_cloud' | 'webhook';
+
+export interface AutomationConfig {
+  id: number;
+  auto_archive_expired: boolean;
+  auto_whatsapp_enabled: boolean;
+  free_reminder_hours_before: number;
+  paid_reminder_days_before: number;
+  whatsapp_provider: WhatsAppProvider;
+  whatsapp_endpoint: string;
+  whatsapp_token: string;
+  free_expiry_template: string;
+  paid_expiry_template: string;
+  last_run_at?: string | null;
+  last_run_summary?: string | null;
+  updated_at?: string;
+}
+
+export interface WhatsAppLog {
+  id: string;
+  target_type: 'free_ad_expiry' | 'paid_sub_expiry' | 'auto_reply';
+  target_id: string;
+  target_expires_at?: string | null;
+  client_name: string;
+  client_phone: string;
+  message_body: string;
+  delivery_status: 'sent' | 'failed';
+  provider_response?: string | null;
+  sent_at: string;
+}
+
+export interface AutomationTargetPreview {
+  target_type: 'free_ad_expiry' | 'paid_sub_expiry';
+  target_id: string;
+  target_expires_at: string;
+  client_name: string;
+  client_phone: string;
+  title: string;
+  views_count?: number;
+  remaining_label: string;
+  message_body: string;
+  already_sent: boolean;
+  whatsapp_direct_url: string;
+}
+
+export interface AutomationRunResult {
+  ok: boolean;
+  archivedCount: number;
+  sentCount: number;
+  failedCount: number;
+  skippedCount: number;
+  summary: string;
 }

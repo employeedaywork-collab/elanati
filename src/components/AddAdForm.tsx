@@ -7,6 +7,7 @@ import { AdAllowance, AdCategory, SiteSettings } from '../types';
 interface AddAdFormProps {
   settings: SiteSettings;
   onSubmit: (ad: {
+    client_name: string;
     title: string;
     category: AdCategory;
     description: string;
@@ -31,15 +32,18 @@ export default function AddAdForm({
   onOpenPortal,
 }: AddAdFormProps) {
   const [formData, setFormData] = useState(() => {
+    let savedName = '';
     let savedPhone = '';
     let savedSubCode = '';
     try {
+      savedName = localStorage.getItem('elanati_last_client_name') || '';
       savedPhone = localStorage.getItem('elanati_last_client_phone') || '';
       savedSubCode = localStorage.getItem('elanati_last_sub_code') || '';
     } catch {
       // ignore
     }
     return {
+      client_name: savedName,
       title: '',
       category: 'توزيع' as AdCategory,
       description: '',
@@ -78,6 +82,10 @@ export default function AddAdForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!formData.client_name.trim()) {
+      setError('يرجى إدخال اسم المعلن أو المسؤول');
+      return;
+    }
     if (formData.contact.replace(/\D/g, '').length < 10) {
       setError('يرجى إدخال رقم هاتف مصري صحيح (11 رقم)');
       return;
@@ -85,6 +93,7 @@ export default function AddAdForm({
     setSubmitting(true);
     try {
       const result = await onSubmit({
+        client_name: formData.client_name.trim(),
         title: formData.title,
         category: formData.category,
         description: formData.description,
@@ -97,6 +106,7 @@ export default function AddAdForm({
         subscription_code: formData.subscription_code || undefined,
       });
       try {
+        localStorage.setItem('elanati_last_client_name', formData.client_name.trim());
         localStorage.setItem('elanati_last_client_phone', formData.contact.trim());
         if (formData.subscription_code.trim()) {
           localStorage.setItem('elanati_last_sub_code', formData.subscription_code.trim().toUpperCase());
@@ -237,6 +247,20 @@ export default function AddAdForm({
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                اسم المعلن / المسؤول *
+              </label>
+              <input
+                type="text"
+                required
+                value={formData.client_name}
+                onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
+                placeholder="مثال: أحمد محمود / شركة النيل للتوريدات"
+                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none text-sm"
+              />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

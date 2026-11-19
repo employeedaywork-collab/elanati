@@ -89,6 +89,7 @@ export default function HomePage() {
   };
 
   const handleCreateAd = async (input: {
+    client_name?: string;
     title: string;
     category: AdCategory;
     description: string;

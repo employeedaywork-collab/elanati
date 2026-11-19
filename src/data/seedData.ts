@@ -1,4 +1,4 @@
-import { Ad, PackagePlan, SiteSettings, Testimonial } from '../types';
+import { Ad, AutomationConfig, PackagePlan, SiteSettings, Testimonial } from '../types';
 
 export const EGYPT_GOVERNORATES: string[] = [
   'القاهرة',
@@ -55,9 +55,32 @@ const nowMs = Date.now();
 const daysFromNow = (days: number) => new Date(nowMs + days * 24 * 60 * 60 * 1000).toISOString();
 const daysAgo = (days: number) => new Date(nowMs - days * 24 * 60 * 60 * 1000).toISOString();
 
+export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
+  id: 1,
+  auto_archive_expired: true,
+  auto_whatsapp_enabled: false,
+  free_reminder_hours_before: 48,
+  paid_reminder_days_before: 7,
+  whatsapp_provider: 'ultramsg',
+  whatsapp_endpoint: '',
+  whatsapp_token: '',
+  free_expiry_template: `أهلاً أستاذ {الاسم}، مع حضرتك إدارة منصة إعلاناتي 👋
+إعلان حضرتك "{عنوان_الإعلان}" شافوه {المشاهدات} تاجر ومهتم حتى الآن، وهينتهي ظهوره المجاني خلال 48 ساعة.
+لو حابب يفضل إعلانك ظاهر 30 يوم كاملة في أعلى النتائج + نجمة تمييز + إمكانية إضافة 10 إعلانات وصور متعددة للمنتجات:
+تقدر تفعّل الباقة الاحترافية بـ 249 جنيه فقط عبر فودافون كاش أو إنستاباي على رقم 01007008707 وهيتفعل فوراً مع عدّاد لمتابعة اشتراكك.
+تحب أفعل لحضرتك الترقية؟`,
+  paid_expiry_template: `أهلاً أستاذ {الاسم}، مع حضرتك إدارة منصة إعلاناتي 👋
+نود تذكير حضرتك بأن اشتراكك في باقة "{الباقة}" (كود {كود_الاشتراك}) سينتهي خلال {الأيام_المتبقية} أيام بتاريخ {تاريخ_الانتهاء}.
+حتى تستمر إعلاناتك ظاهرة أمام التجار بدون انقطاع، يمكنك تجديد الاشتراك عبر فودافون كاش أو إنستاباي على رقم 01007008707.
+تحب نجهز لحضرتك التجديد الآن؟`,
+  last_run_at: null,
+  last_run_summary: null,
+};
+
 export const INITIAL_ADS: Ad[] = [
   {
     id: 'ad-1',
+    client_name: 'شركة النيل للتوريدات',
     title: 'توزيع مواد غذائية بالجملة',
     category: 'توزيع',
     description: 'نوفر جميع المواد الغذائية بالجملة بأسعار تنافسية مع خدمة توصيل لجميع المحافظات',
@@ -77,6 +100,7 @@ export const INITIAL_ADS: Ad[] = [
   },
   {
     id: 'ad-2',
+    client_name: 'أحمد سامي',
     title: 'عروض خاصة على الأجهزة الإلكترونية',
     category: 'تجارة',
     description: 'خصومات تصل إلى 40% على جميع الأجهزة الإلكترونية - عرض محدود للتجار والموزعين',
@@ -96,6 +120,7 @@ export const INITIAL_ADS: Ad[] = [
   },
   {
     id: 'ad-3',
+    client_name: 'محمود حسن',
     title: 'محل ملابس رجالي - تشكيلة جديدة',
     category: 'محلات',
     description: 'وصلتنا تشكيلة جديدة من الملابس الرجالية العصرية بأسعار مناسبة للتجار والأفراد',
@@ -109,12 +134,13 @@ export const INITIAL_ADS: Ad[] = [
     status: 'approved',
     featured: false,
     views_count: 64,
-    starts_at: daysAgo(1),
-    expires_at: daysFromNow(6),
-    created_at: daysAgo(1),
+    starts_at: daysAgo(6),
+    expires_at: daysFromNow(1),
+    created_at: daysAgo(6),
   },
   {
     id: 'ad-4',
+    client_name: 'شركة الفجر لمستحضرات التجميل',
     title: 'وكالة توزيع مستحضرات تجميل',
     category: 'توزيع',
     description: 'وكالة حصرية لتوزيع مستحضرات التجميل العالمية - أسعار خاصة للتجار وأصحاب الصيدليات',
@@ -128,12 +154,13 @@ export const INITIAL_ADS: Ad[] = [
     status: 'approved',
     featured: false,
     views_count: 89,
-    starts_at: daysAgo(2),
-    expires_at: daysFromNow(5),
-    created_at: daysAgo(2),
+    starts_at: daysAgo(5),
+    expires_at: daysFromNow(2),
+    created_at: daysAgo(5),
   },
   {
     id: 'ad-5',
+    client_name: 'خالد عبد الرحمن',
     title: 'معرض أثاث ومفروشات',
     category: 'محلات',
     description: 'أحدث تصاميم الأثاث والمفروشات المنزلية والمكتبية بأسعار الجملة وتسهيلات في السداد',
@@ -153,6 +180,7 @@ export const INITIAL_ADS: Ad[] = [
   },
   {
     id: 'ad-6',
+    client_name: 'طارق إبراهيم',
     title: 'توزيع مواد بناء',
     category: 'توزيع',
     description: 'جميع مواد البناء والتشييد بأسعار الجملة مع التوصيل المباشر للمواقع والمشاريع',

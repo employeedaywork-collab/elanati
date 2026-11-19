@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Bot,
   ExternalLink,
   Inbox,
   Layers,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 import AdminAdsManager from '../components/admin/AdminAdsManager';
 import AdminAuth from '../components/admin/AdminAuth';
+import AdminAutomation from '../components/admin/AdminAutomation';
 import AdminContentSettings from '../components/admin/AdminContentSettings';
 import AdminInbox from '../components/admin/AdminInbox';
 import AdminOverview from '../components/admin/AdminOverview';
@@ -25,6 +27,7 @@ import {
 } from '../data/seedData';
 import { supabase } from '../lib/supabase';
 import {
+  archiveExpiredAdsAdmin,
   fetchAllAdsAdmin,
   fetchAllTicketsAdmin,
   fetchPackageRequestsAdmin,
@@ -45,13 +48,14 @@ import {
   Testimonial,
 } from '../types';
 
-type AdminTab = 'overview' | 'ads' | 'inbox' | 'packages' | 'settings';
+type AdminTab = 'overview' | 'ads' | 'inbox' | 'packages' | 'automation' | 'settings';
 
 const TAB_TITLES: Record<AdminTab, string> = {
   overview: 'نظرة عامة',
   ads: 'إدارة الإعلانات',
   inbox: 'مركز التواصل والرسائل',
   packages: 'الباقات وطلبات الاشتراك',
+  automation: 'الأتمتة والواتساب',
   settings: 'المحتوى والإعدادات',
 };
 
@@ -75,6 +79,7 @@ export default function AdminPage() {
     setLoadingData(true);
     setLoadError('');
     try {
+      await archiveExpiredAdsAdmin().catch(() => 0);
       const [
         loadedAds,
         loadedTickets,
@@ -214,6 +219,7 @@ export default function AdminPage() {
     { id: 'ads', label: 'إدارة الإعلانات', icon: Megaphone, badge: pendingAdsCount },
     { id: 'inbox', label: 'تواصل العملاء', icon: Inbox, badge: openTicketsCount },
     { id: 'packages', label: 'الباقات والطلبات', icon: Layers, badge: pendingPackagesCount },
+    { id: 'automation', label: 'الأتمتة والواتساب', icon: Bot },
     { id: 'settings', label: 'المحتوى والإعدادات', icon: Settings },
   ];
 
@@ -442,6 +448,8 @@ export default function AdminPage() {
               onRefresh={refreshAll}
             />
           )}
+
+          {activeTab === 'automation' && <AdminAutomation onRefresh={refreshAll} />}
 
           {activeTab === 'settings' && (
             <AdminContentSettings

@@ -30,6 +30,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const [newAdForm, setNewAdForm] = useState({
+    client_name: '',
     title: '',
     category: 'توزيع' as AdCategory,
     description: '',
@@ -55,6 +56,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
     const matchesSearch =
       !q ||
       ad.title.toLowerCase().includes(q) ||
+      (ad.client_name || '').toLowerCase().includes(q) ||
       ad.city.toLowerCase().includes(q) ||
       ad.contact.includes(q);
     return matchesStatus && matchesSearch;
@@ -119,6 +121,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
           ? 1
           : 0;
       await updateAdAdmin(editingAd.id, {
+        client_name: editingAd.client_name || null,
         title: editingAd.title,
         category: editingAd.category,
         city: editingAd.city,
@@ -150,6 +153,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
       });
       setCreatingNew(false);
       setNewAdForm({
+        client_name: '',
         title: '',
         category: 'توزيع',
         description: '',
@@ -259,6 +263,7 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                           <div className="min-w-0">
                             <p className="font-bold text-slate-900 truncate">{ad.title}</p>
                             <p className="text-xs text-slate-500 truncate">
+                              {ad.client_name ? `${ad.client_name} · ` : ''}
                               {ad.category} · {ad.city}
                             </p>
                           </div>
@@ -391,6 +396,13 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 <X className="w-5 h-5" />
               </button>
             </div>
+            <input
+              type="text"
+              placeholder="اسم المعلن / المسؤول"
+              value={editingAd.client_name || ''}
+              onChange={(e) => setEditingAd({ ...editingAd, client_name: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm"
+            />
             <input
               type="text"
               required
@@ -541,6 +553,14 @@ export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps
                 <X className="w-5 h-5" />
               </button>
             </div>
+            <input
+              type="text"
+              required
+              placeholder="اسم المعلن / المسؤول"
+              value={newAdForm.client_name}
+              onChange={(e) => setNewAdForm({ ...newAdForm, client_name: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm"
+            />
             <input
               type="text"
               required

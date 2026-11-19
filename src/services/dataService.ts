@@ -1,4 +1,5 @@
 import {
+  DEFAULT_AUTOMATION_CONFIG,
   DEFAULT_SITE_SETTINGS,
   INITIAL_ADS,
   INITIAL_PACKAGES,
@@ -11,6 +12,9 @@ import {
   AdCategory,
   AdStatus,
   AdminSession,
+  AutomationConfig,
+  AutomationRunResult,
+  AutomationTargetPreview,
   ClientPortalData,
   ContactMessage,
   PackagePlan,
@@ -21,6 +25,7 @@ import {
   SupportMessage,
   Testimonial,
   TicketStatus,
+  WhatsAppLog,
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -31,6 +36,8 @@ const STORAGE_KEYS = {
   packages: 'elanati_local_packages_v1',
   testimonials: 'elanati_local_testimonials_v1',
   settings: 'elanati_local_settings_v1',
+  automationConfig: 'elanati_local_automation_cfg_v1',
+  whatsappLogs: 'elanati_local_wa_logs_v1',
   previewAdmin: 'elanati_preview_admin_v1',
 };
 
@@ -200,6 +207,7 @@ export async function checkAdAllowance(
       allowed: activeClientAds.length < maxAds,
       package_name: activeSub.package_name,
       subscription_code: activeSub.subscription_code,
+      subscription_expires_at: activeSub.expires_at || null,
       max_ads: maxAds,
       used_ads: activeClientAds.length,
       duration_days: isEnterprise ? null : proDays,
@@ -295,8 +303,20 @@ export async function fetchPublicAds(): Promise<Ad[]> {
   }
 
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
-  return all
-    .map(normalizeAdRow)
+  let changed = false;
+  const archivedSynced = all.map((rawAd) => {
+    const ad = normalizeAdRow(rawAd);
+    if (ad.status === 'approved' && isAdExpired(ad)) {
+      changed = true;
+      return { ...ad, status: 'archived' as AdStatus, updated_at: nowIso };
+    }
+    return ad;
+  });
+  if (changed) {
+    writeLocal(STORAGE_KEYS.ads, archivedSynced);
+  }
+
+  return archivedSynced
     .filter((ad) => ad.status === 'approved' && !isAdExpired(ad))
     .sort((a, b) => {
       const rankDiff = (b.priority_rank || 0) - (a.priority_rank || 0);
@@ -320,6 +340,7 @@ export async function fetchAllAdsAdmin(): Promise<Ad[]> {
 }
 
 export interface CreateAdInput {
+  client_name?: string;
   title: string;
   category: AdCategory;
   description: string;
@@ -375,10 +396,13 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
       expiresAt = null;
     }
   } else if (allowance) {
-    expiresAt =
-      allowance.is_permanent || allowance.duration_days === null
-        ? null
-        : addDaysIso(now, allowance.duration_days);
+    if (allowance.is_permanent || allowance.duration_days === null) {
+      expiresAt = null;
+    } else if (allowance.subscription_expires_at && allowance.package_name !== 'مجاني') {
+      expiresAt = allowance.subscription_expires_at;
+    } else {
+      expiresAt = addDaysIso(now, allowance.duration_days);
+    }
   }
 
   const isFeatured = input.asAdmin
@@ -402,6 +426,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
 
   const newAd: Ad = {
     id: generateId('ad'),
+    client_name: input.client_name?.trim() || null,
     title: input.title.trim(),
     category: input.category,
     description: input.description.trim(),
@@ -427,6 +452,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
   if (supabase) {
     const { error } = await supabase.from('elanati_ads').insert({
       id: newAd.id,
+      client_name: newAd.client_name,
       title: newAd.title,
       category: newAd.category,
       description: newAd.description,
@@ -883,7 +909,7 @@ export async function activateSubscriptionAdmin(
 
   // Upgrade existing active/pending ads for the same phone number
   const clientDigits = normalizeDigits(req.client_phone);
-  const adExpiresAt = isEnterprise ? null : addDaysIso(now, settings.pro_ad_days || 30);
+  const adExpiresAt = isEnterprise ? null : expiresAt;
   const priorityRank = isEnterprise ? 2 : 1;
 
   if (supabase) {
@@ -897,6 +923,7 @@ export async function activateSubscriptionAdmin(
     await Promise.all(
       matchingAds.map((ad) =>
         updateAdAdmin(ad.id, {
+          client_name: ad.client_name || req.client_name,
           package_name: req.package_name,
           subscription_code: subCode,
           featured: true,
@@ -916,6 +943,7 @@ export async function activateSubscriptionAdmin(
       ad.status !== 'rejected' && normalizeDigits(ad.contact) === clientDigits
         ? {
             ...ad,
+            client_name: ad.client_name || req.client_name,
             package_name: req.package_name,
             subscription_code: subCode,
             featured: true,
@@ -1168,4 +1196,323 @@ export async function signOutAdmin(): Promise<void> {
     await supabase.auth.signOut();
   }
   localStorage.removeItem(STORAGE_KEYS.previewAdmin);
+}
+
+// ============================================================================
+// Full Automation (Auto-Archiving Expired Ads & Automated WhatsApp Alerts)
+// ============================================================================
+export function renderWhatsAppTemplate(
+  template: string,
+  vars: Record<string, string | number>
+): string {
+  let out = template;
+  for (const [key, val] of Object.entries(vars)) {
+    out = out.split(`{${key}}`).join(String(val));
+  }
+  return out;
+}
+
+export async function archiveExpiredAdsAdmin(): Promise<number> {
+  const nowIso = new Date().toISOString();
+
+  if (supabase) {
+    const { data: rpcCount, error: rpcErr } = await supabase.rpc('archive_expired_elanati_ads');
+    if (!rpcErr && typeof rpcCount === 'number') {
+      return rpcCount;
+    }
+
+    const { data: expiredAds } = await supabase
+      .from('elanati_ads')
+      .select('id')
+      .eq('status', 'approved')
+      .not('expires_at', 'is', null)
+      .lte('expires_at', nowIso);
+
+    if (expiredAds && expiredAds.length > 0) {
+      const ids = expiredAds.map((a: any) => a.id);
+      const { error } = await supabase
+        .from('elanati_ads')
+        .update({ status: 'archived', updated_at: nowIso })
+        .in('id', ids);
+      if (!error) return ids.length;
+    }
+    return 0;
+  }
+
+  const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  const requests = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
+  let archivedCount = 0;
+
+  const updated = ads.map((ad) => {
+    if (ad.status !== 'approved') return ad;
+    const subExpired =
+      ad.subscription_code &&
+      ad.package_name !== 'المؤسسي' &&
+      requests.some(
+        (r) =>
+          r.subscription_code &&
+          r.subscription_code.toUpperCase() === ad.subscription_code!.toUpperCase() &&
+          (r.status === 'cancelled' || (r.expires_at && new Date(r.expires_at).getTime() <= Date.now()))
+      );
+    if (isAdExpired(ad) || subExpired) {
+      archivedCount++;
+      return { ...ad, status: 'archived' as AdStatus, updated_at: nowIso };
+    }
+    return ad;
+  });
+
+  if (archivedCount > 0) {
+    writeLocal(STORAGE_KEYS.ads, updated);
+  }
+  return archivedCount;
+}
+
+export async function fetchAutomationConfigAdmin(): Promise<AutomationConfig> {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('elanati_automation_config')
+      .select('*')
+      .eq('id', 1)
+      .maybeSingle();
+    if (!error && data) {
+      return {
+        ...DEFAULT_AUTOMATION_CONFIG,
+        ...(data as Partial<AutomationConfig>),
+      };
+    }
+  }
+  return {
+    ...DEFAULT_AUTOMATION_CONFIG,
+    ...readLocal<Partial<AutomationConfig>>(
+      STORAGE_KEYS.automationConfig,
+      DEFAULT_AUTOMATION_CONFIG
+    ),
+  };
+}
+
+export async function updateAutomationConfigAdmin(
+  patch: Partial<AutomationConfig>
+): Promise<AutomationConfig> {
+  const current = await fetchAutomationConfigAdmin();
+  const updated: AutomationConfig = {
+    ...current,
+    ...patch,
+    id: 1,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('elanati_automation_config')
+      .upsert(updated)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return { ...DEFAULT_AUTOMATION_CONFIG, ...(data as Partial<AutomationConfig>) };
+  }
+
+  writeLocal(STORAGE_KEYS.automationConfig, updated);
+  return updated;
+}
+
+export async function fetchWhatsAppLogsAdmin(): Promise<WhatsAppLog[]> {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('elanati_whatsapp_logs')
+      .select('*')
+      .order('sent_at', { ascending: false })
+      .limit(100);
+    if (!error && data) {
+      return data as WhatsAppLog[];
+    }
+    return [];
+  }
+  return readLocal<WhatsAppLog[]>(STORAGE_KEYS.whatsappLogs, []);
+}
+
+export async function findPendingAutomationTargetsAdmin(): Promise<AutomationTargetPreview[]> {
+  const [ads, requests, config, logs] = await Promise.all([
+    fetchAllAdsAdmin(),
+    fetchPackageRequestsAdmin(),
+    fetchAutomationConfigAdmin(),
+    fetchWhatsAppLogsAdmin(),
+  ]);
+
+  const nowMs = Date.now();
+  const sentSet = new Set(
+    logs
+      .filter((l) => l.delivery_status === 'sent')
+      .map((l) => `${l.target_type}:${l.target_id}:${l.target_expires_at || ''}`)
+  );
+
+  const phoneToName = new Map<string, string>();
+  for (const r of requests) {
+    const d = normalizeDigits(r.client_phone);
+    if (d && r.client_name && !phoneToName.has(d)) {
+      phoneToName.set(d, r.client_name);
+    }
+  }
+
+  const targets: AutomationTargetPreview[] = [];
+
+  // 1) Free ads within reminder window (default 48h before expiry)
+  const freeWindowMs = (config.free_reminder_hours_before || 48) * 60 * 60 * 1000;
+  for (const ad of ads) {
+    if (ad.status !== 'approved' || ad.package_name !== 'مجاني' || !ad.expires_at) continue;
+    const expMs = new Date(ad.expires_at).getTime();
+    if (expMs <= nowMs || expMs - nowMs > freeWindowMs) continue;
+
+    const remHours = Math.max(1, Math.ceil((expMs - nowMs) / (1000 * 60 * 60)));
+    const digits = normalizeDigits(ad.contact);
+    const clientName = (ad.client_name && ad.client_name.trim()) || phoneToName.get(digits) || 'عميلنا العزيز';
+
+    const messageBody = renderWhatsAppTemplate(config.free_expiry_template, {
+      الاسم: clientName,
+      عنوان_الإعلان: ad.title,
+      المشاهدات: ad.views_count || 0,
+      تاريخ_الانتهاء: ad.expires_at.split('T')[0],
+    });
+
+    const dedupeKey = `free_ad_expiry:${ad.id}:${ad.expires_at}`;
+    const waDigits = normalizePhoneToWhatsApp(ad.whatsapp || ad.contact);
+
+    targets.push({
+      target_type: 'free_ad_expiry',
+      target_id: ad.id,
+      target_expires_at: ad.expires_at,
+      client_name: clientName,
+      client_phone: ad.contact,
+      title: ad.title,
+      views_count: ad.views_count || 0,
+      remaining_label: remHours >= 24 ? `${Math.ceil(remHours / 24)} يوم (${remHours} ساعة)` : `${remHours} ساعة`,
+      message_body: messageBody,
+      already_sent: sentSet.has(dedupeKey),
+      whatsapp_direct_url: `https://wa.me/${waDigits}?text=${encodeURIComponent(messageBody)}`,
+    });
+  }
+
+  // 2) Paid subscriptions within reminder window (default 7 days / 1 week before expiry)
+  const paidWindowMs = (config.paid_reminder_days_before || 7) * 24 * 60 * 60 * 1000;
+  for (const sub of requests) {
+    if (sub.status !== 'activated' || !sub.expires_at) continue;
+    const expMs = new Date(sub.expires_at).getTime();
+    if (expMs <= nowMs || expMs - nowMs > paidWindowMs) continue;
+
+    const remDays = Math.max(1, Math.ceil((expMs - nowMs) / (1000 * 60 * 60 * 24)));
+    const clientName = (sub.client_name && sub.client_name.trim()) || 'عميلنا العزيز';
+
+    const messageBody = renderWhatsAppTemplate(config.paid_expiry_template, {
+      الاسم: clientName,
+      الباقة: sub.package_name,
+      كود_الاشتراك: sub.subscription_code || '-',
+      الأيام_المتبقية: remDays,
+      تاريخ_الانتهاء: sub.expires_at.split('T')[0],
+    });
+
+    const dedupeKey = `paid_sub_expiry:${sub.id}:${sub.expires_at}`;
+    const waDigits = normalizePhoneToWhatsApp(sub.client_phone);
+
+    targets.push({
+      target_type: 'paid_sub_expiry',
+      target_id: sub.id,
+      target_expires_at: sub.expires_at,
+      client_name: clientName,
+      client_phone: sub.client_phone,
+      title: `اشتراك ${sub.package_name} (${sub.subscription_code || ''})`,
+      remaining_label: `${remDays} أيام (ينتهي ${sub.expires_at.split('T')[0]})`,
+      message_body: messageBody,
+      already_sent: sentSet.has(dedupeKey),
+      whatsapp_direct_url: `https://wa.me/${waDigits}?text=${encodeURIComponent(messageBody)}`,
+    });
+  }
+
+  return targets;
+}
+
+export async function runAutomationNowAdmin(): Promise<AutomationRunResult> {
+  if (supabase) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (token) {
+      try {
+        const res = await fetch('/api/cron/automation', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const payload = (await res.json()) as AutomationRunResult & { error?: string };
+          if (!res.ok) {
+            throw new Error(payload.error || 'تعذر تشغيل الأتمتة');
+          }
+          return payload;
+        }
+      } catch (err: any) {
+        if (err?.message && !String(err.message).includes('fetch')) {
+          throw err;
+        }
+      }
+    }
+
+    const archivedCount = await archiveExpiredAdsAdmin();
+    const summary = `أرشفة ${archivedCount} إعلان منتهي تلقائياً`;
+    await updateAutomationConfigAdmin({
+      last_run_at: new Date().toISOString(),
+      last_run_summary: summary,
+    });
+    return {
+      ok: true,
+      archivedCount,
+      sentCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+      summary,
+    };
+  }
+
+  // Local preview mode simulation
+  const archivedCount = await archiveExpiredAdsAdmin();
+  const config = await fetchAutomationConfigAdmin();
+  const targets = await findPendingAutomationTargetsAdmin();
+  const dueTargets = targets.filter((t) => !t.already_sent);
+  let sentCount = 0;
+
+  if (config.auto_whatsapp_enabled && dueTargets.length > 0) {
+    const existingLogs = readLocal<WhatsAppLog[]>(STORAGE_KEYS.whatsappLogs, []);
+    const newLogs: WhatsAppLog[] = dueTargets.map((t) => {
+      sentCount++;
+      return {
+        id: generateId('wa'),
+        target_type: t.target_type,
+        target_id: t.target_id,
+        target_expires_at: t.target_expires_at,
+        client_name: t.client_name,
+        client_phone: t.client_phone,
+        message_body: t.message_body,
+        delivery_status: config.whatsapp_endpoint.trim() ? 'sent' : 'sent',
+        provider_response: 'معاينة محلية',
+        sent_at: new Date().toISOString(),
+      };
+    });
+    writeLocal(STORAGE_KEYS.whatsappLogs, [...newLogs, ...existingLogs]);
+  }
+
+  const summary = `أرشفة ${archivedCount} إعلان منتهي · تجهيز/إرسال ${sentCount} رسالة واتساب`;
+  await updateAutomationConfigAdmin({
+    last_run_at: new Date().toISOString(),
+    last_run_summary: summary,
+  });
+
+  return {
+    ok: true,
+    archivedCount,
+    sentCount,
+    failedCount: 0,
+    skippedCount: targets.length - dueTargets.length,
+    summary,
+  };
 }

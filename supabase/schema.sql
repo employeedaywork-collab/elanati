@@ -31,9 +31,10 @@ AS $$
   );
 $$;
 
--- 2) جدول الإعلانات (مع مدة الظهور التلقائية والصور الإضافية والبانر والأولوية)
+-- 2) جدول الإعلانات (مع اسم المعلن ومدة الظهور التلقائية والصور الإضافية والبانر والأولوية)
 CREATE TABLE IF NOT EXISTS public.elanati_ads (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_name text,
   title text NOT NULL,
   category text NOT NULL CHECK (category IN ('توزيع', 'تجارة', 'محلات')),
   description text NOT NULL,
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS public.elanati_ads (
 );
 
 -- تحديث آمن إذا كان الجدول منشأً مسبقاً
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS client_name text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS extra_images jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS banner_url text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS subscription_code text;
@@ -447,7 +449,7 @@ BEGIN
   INTO v_ads
   FROM (
     SELECT
-      id, title, category, description, contact, city, image, image_url,
+      id, client_name, title, category, description, contact, city, image, image_url,
       extra_images, banner_url, package_name, subscription_code, priority_rank,
       status, featured, views_count, starts_at, expires_at, created_at
     FROM public.elanati_ads
@@ -536,6 +538,7 @@ BEGIN
       'allowed', v_active_ads < v_sub.max_ads,
       'package_name', v_sub.package_name,
       'subscription_code', v_sub.subscription_code,
+      'subscription_expires_at', v_sub.expires_at,
       'max_ads', v_sub.max_ads,
       'used_ads', v_active_ads,
       'duration_days', CASE WHEN v_sub.package_name = 'المؤسسي' THEN NULL ELSE v_pro_days END,
@@ -599,21 +602,21 @@ VALUES
 ON CONFLICT (slug) DO NOTHING;
 
 INSERT INTO public.elanati_ads (
-  title, category, description, contact, whatsapp, city, image, package_name,
+  client_name, title, category, description, contact, whatsapp, city, image, package_name,
   status, featured, priority_rank, views_count, starts_at, expires_at
 )
 SELECT
-  v.title, v.category, v.description, v.contact, v.whatsapp, v.city, v.image, v.package_name,
+  v.client_name, v.title, v.category, v.description, v.contact, v.whatsapp, v.city, v.image, v.package_name,
   v.status, v.featured, v.priority_rank, v.views_count, now(), v.expires_at
 FROM (
   VALUES
-    ('توزيع مواد غذائية بالجملة', 'توزيع', 'نوفر جميع المواد الغذائية بالجملة بأسعار تنافسية مع خدمة توصيل لجميع المحافظات', '01007008707', '201007008707', 'القاهرة', '📦', 'المؤسسي', 'approved', true, 2, 148, NULL::timestamptz),
-    ('عروض خاصة على الأجهزة الإلكترونية', 'تجارة', 'خصومات تصل إلى 40% على جميع الأجهزة الإلكترونية - عرض محدود للتجار والموزعين', '01012345678', '201012345678', 'الإسكندرية', '💻', 'الاحترافي', 'approved', true, 1, 112, now() + interval '30 days'),
-    ('محل ملابس رجالي - تشكيلة جديدة', 'محلات', 'وصلتنا تشكيلة جديدة من الملابس الرجالية العصرية بأسعار مناسبة للتجار والأفراد', '01098765432', '201098765432', 'الدقهلية', '👔', 'مجاني', 'approved', false, 0, 64, now() + interval '7 days'),
-    ('وكالة توزيع مستحضرات تجميل', 'توزيع', 'وكالة حصرية لتوزيع مستحضرات التجميل العالمية - أسعار خاصة للتجار وأصحاب الصيدليات', '01155566778', '201155566778', 'الجيزة', '💄', 'مجاني', 'approved', false, 0, 89, now() + interval '7 days'),
-    ('معرض أثاث ومفروشات', 'محلات', 'أحدث تصاميم الأثاث والمفروشات المنزلية والمكتبية بأسعار الجملة وتسهيلات في السداد', '01234567890', '201234567890', 'الغربية', '🪑', 'الاحترافي', 'approved', true, 1, 131, now() + interval '30 days'),
-    ('توزيع مواد بناء', 'توزيع', 'جميع مواد البناء والتشييد بأسعار الجملة مع التوصيل المباشر للمواقع والمشاريع', '01556789012', '201556789012', 'المنيا', '🏗️', 'مجاني', 'approved', false, 0, 73, now() + interval '7 days')
-) AS v(title, category, description, contact, whatsapp, city, image, package_name, status, featured, priority_rank, views_count, expires_at)
+    ('شركة النيل للتوريدات', 'توزيع مواد غذائية بالجملة', 'توزيع', 'نوفر جميع المواد الغذائية بالجملة بأسعار تنافسية مع خدمة توصيل لجميع المحافظات', '01007008707', '201007008707', 'القاهرة', '📦', 'المؤسسي', 'approved', true, 2, 148, NULL::timestamptz),
+    ('أحمد سامي', 'عروض خاصة على الأجهزة الإلكترونية', 'تجارة', 'خصومات تصل إلى 40% على جميع الأجهزة الإلكترونية - عرض محدود للتجار والموزعين', '01012345678', '201012345678', 'الإسكندرية', '💻', 'الاحترافي', 'approved', true, 1, 112, now() + interval '30 days'),
+    ('محمود حسن', 'محل ملابس رجالي - تشكيلة جديدة', 'محلات', 'وصلتنا تشكيلة جديدة من الملابس الرجالية العصرية بأسعار مناسبة للتجار والأفراد', '01098765432', '201098765432', 'الدقهلية', '👔', 'مجاني', 'approved', false, 0, 64, now() + interval '7 days'),
+    ('شركة الفجر لمستحضرات التجميل', 'وكالة توزيع مستحضرات تجميل', 'توزيع', 'وكالة حصرية لتوزيع مستحضرات التجميل العالمية - أسعار خاصة للتجار وأصحاب الصيدليات', '01155566778', '201155566778', 'الجيزة', '💄', 'مجاني', 'approved', false, 0, 89, now() + interval '7 days'),
+    ('خالد عبد الرحمن', 'معرض أثاث ومفروشات', 'محلات', 'أحدث تصاميم الأثاث والمفروشات المنزلية والمكتبية بأسعار الجملة وتسهيلات في السداد', '01234567890', '201234567890', 'الغربية', '🪑', 'الاحترافي', 'approved', true, 1, 131, now() + interval '30 days'),
+    ('طارق إبراهيم', 'توزيع مواد بناء', 'توزيع', 'جميع مواد البناء والتشييد بأسعار الجملة مع التوصيل المباشر للمواقع والمشاريع', '01556789012', '201556789012', 'المنيا', '🏗️', 'مجاني', 'approved', false, 0, 73, now() + interval '7 days')
+) AS v(client_name, title, category, description, contact, whatsapp, city, image, package_name, status, featured, priority_rank, views_count, expires_at)
 WHERE NOT EXISTS (SELECT 1 FROM public.elanati_ads);
 
 INSERT INTO public.elanati_testimonials (name, role, city, text, rating, avatar, is_visible)
@@ -627,18 +630,154 @@ FROM (
 WHERE NOT EXISTS (SELECT 1 FROM public.elanati_testimonials);
 
 -- ============================================================================
+-- 9) جداول ودوال الأتمتة الكاملة (إزالة الإعلانات المنتهية + ربط الواتساب التلقائي)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.elanati_automation_config (
+  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  auto_archive_expired boolean NOT NULL DEFAULT true,
+  auto_whatsapp_enabled boolean NOT NULL DEFAULT false,
+  free_reminder_hours_before integer NOT NULL DEFAULT 48,
+  paid_reminder_days_before integer NOT NULL DEFAULT 7,
+  whatsapp_provider text NOT NULL DEFAULT 'ultramsg' CHECK (whatsapp_provider IN ('ultramsg', 'meta_cloud', 'webhook')),
+  whatsapp_endpoint text NOT NULL DEFAULT '',
+  whatsapp_token text NOT NULL DEFAULT '',
+  free_expiry_template text NOT NULL DEFAULT '',
+  paid_expiry_template text NOT NULL DEFAULT '',
+  last_run_at timestamptz,
+  last_run_summary text,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.elanati_whatsapp_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_type text NOT NULL CHECK (target_type IN ('free_ad_expiry', 'paid_sub_expiry', 'auto_reply')),
+  target_id text NOT NULL,
+  target_expires_at timestamptz,
+  client_name text NOT NULL,
+  client_phone text NOT NULL,
+  message_body text NOT NULL,
+  delivery_status text NOT NULL DEFAULT 'sent' CHECK (delivery_status IN ('sent', 'failed')),
+  provider_response text,
+  sent_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_elanati_whatsapp_logs_target
+  ON public.elanati_whatsapp_logs (target_type, target_id, sent_at DESC);
+
+ALTER TABLE public.elanati_automation_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.elanati_whatsapp_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can manage automation config" ON public.elanati_automation_config;
+CREATE POLICY "Admins can manage automation config"
+  ON public.elanati_automation_config FOR ALL
+  TO authenticated
+  USING (public.is_elanati_admin())
+  WITH CHECK (public.is_elanati_admin());
+
+DROP POLICY IF EXISTS "Admins can manage whatsapp logs" ON public.elanati_whatsapp_logs;
+CREATE POLICY "Admins can manage whatsapp logs"
+  ON public.elanati_whatsapp_logs FOR ALL
+  TO authenticated
+  USING (public.is_elanati_admin())
+  WITH CHECK (public.is_elanati_admin());
+
+INSERT INTO public.elanati_automation_config (
+  id,
+  auto_archive_expired,
+  auto_whatsapp_enabled,
+  free_reminder_hours_before,
+  paid_reminder_days_before,
+  whatsapp_provider,
+  whatsapp_endpoint,
+  whatsapp_token,
+  free_expiry_template,
+  paid_expiry_template
+)
+VALUES (
+  1,
+  true,
+  false,
+  48,
+  7,
+  'ultramsg',
+  '',
+  '',
+  E'أهلاً أستاذ {الاسم}، مع حضرتك إدارة منصة إعلاناتي 👋\nإعلان حضرتك "{عنوان_الإعلان}" شافوه {المشاهدات} تاجر ومهتم حتى الآن، وهينتهي ظهوره المجاني خلال 48 ساعة.\nلو حابب يفضل إعلانك ظاهر 30 يوم كاملة في أعلى النتائج + نجمة تمييز + إمكانية إضافة 10 إعلانات وصور متعددة للمنتجات:\nتقدر تفعّل الباقة الاحترافية بـ 249 جنيه فقط عبر فودافون كاش أو إنستاباي على رقم 01007008707 وهيتفعل فوراً مع عدّاد لمتابعة اشتراكك.\nتحب أفعل لحضرتك الترقية؟',
+  E'أهلاً أستاذ {الاسم}، مع حضرتك إدارة منصة إعلاناتي 👋\nنود تذكير حضرتك بأن اشتراكك في باقة "{الباقة}" (كود {كود_الاشتراك}) سينتهي خلال {الأيام_المتبقية} أيام بتاريخ {تاريخ_الانتهاء}.\nحتى تستمر إعلاناتك ظاهرة أمام التجار بدون انقطاع، يمكنك تجديد الاشتراك عبر فودافون كاش أو إنستاباي على رقم 01007008707.\nتحب نجهز لحضرتك التجديد الآن؟'
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- دالة أرشفة وإزالة الإعلانات المنتهية تلقائياً حسب تاريخ الاشتراك أو الصلاحية المسجل
+CREATE OR REPLACE FUNCTION public.archive_expired_elanati_ads()
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_count integer := 0;
+BEGIN
+  IF current_user NOT IN ('postgres', 'supabase_admin')
+     AND COALESCE(auth.role(), '') <> 'service_role'
+     AND NOT public.is_elanati_admin() THEN
+    RAISE EXCEPTION 'غير مصرح بتنفيذ هذا الإجراء';
+  END IF;
+
+  UPDATE public.elanati_ads a
+  SET status = 'archived',
+      updated_at = now()
+  WHERE a.status = 'approved'
+    AND (
+      (a.expires_at IS NOT NULL AND a.expires_at <= now())
+      OR EXISTS (
+        SELECT 1
+        FROM public.elanati_package_requests r
+        WHERE a.subscription_code IS NOT NULL
+          AND upper(a.subscription_code) = upper(r.subscription_code)
+          AND a.package_name <> 'المؤسسي'
+          AND (
+            r.status = 'cancelled'
+            OR (r.expires_at IS NOT NULL AND r.expires_at <= now())
+          )
+      )
+    );
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+-- جدولة تلقائية داخل PostgreSQL إن كان ملحق pg_cron مفعّلاً في المشروع
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    BEGIN
+      PERFORM cron.unschedule('elanati-archive-expired-ads');
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
+    PERFORM cron.schedule(
+      'elanati-archive-expired-ads',
+      '0 * * * *',
+      'SELECT public.archive_expired_elanati_ads();'
+    );
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+-- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_ads TO anon, authenticated;
 GRANT INSERT ON public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests TO anon, authenticated;
-GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings TO authenticated;
+GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_automation_config, public.elanati_whatsapp_logs TO authenticated;
 
 GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_messages(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.archive_expired_elanati_ads() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO anon, authenticated;
 
 DO $$
@@ -658,6 +797,10 @@ BEGIN
     END;
     BEGIN
       ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_package_requests;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_whatsapp_logs;
     EXCEPTION WHEN duplicate_object THEN NULL;
     END;
   END IF;

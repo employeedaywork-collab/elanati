@@ -1,34 +1,84 @@
-interface HeroProps { onAddAd: () => void; }
+import { AdCategory } from '../types';
 
-export default function Hero({ onAddAd }: HeroProps) {
+interface HeroProps {
+  onAddAd: () => void;
+  onSelectCategory: (category: AdCategory | 'الكل') => void;
+}
+
+export default function Hero({ onAddAd, onSelectCategory }: HeroProps) {
+  const quickCategories: { icon: string; label: string; category: AdCategory | 'الكل' }[] = [
+    { icon: '📦', label: 'إعلانات التوزيع', category: 'توزيع' },
+    { icon: '💼', label: 'فرص التجارة والجملة', category: 'تجارة' },
+    { icon: '🏪', label: 'المحلات التجارية', category: 'محلات' },
+    { icon: '🔍', label: 'جميع التصنيفات', category: 'الكل' },
+  ];
+
+  const handleCategoryJump = (cat: AdCategory | 'الكل') => {
+    onSelectCategory(cat);
+    const el = document.getElementById('ads');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
-    <section id="home" className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900">
+    <section
+      id="home"
+      className="relative min-h-[86vh] flex items-center justify-center overflow-hidden pt-24 pb-28 bg-slate-950"
+    >
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950">
         <div className="absolute inset-0 opacity-20">
-          <div className="absolute top-20 right-20 w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl animate-float"></div>
-          <div className="absolute top-40 left-20 w-72 h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl animate-float" style={{ animationDelay: '1s' }}></div>
-          <div className="absolute bottom-20 right-40 w-72 h-72 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl animate-float" style={{ animationDelay: '2s' }}></div>
+          <div className="absolute top-16 right-16 w-80 h-80 bg-blue-500 rounded-full filter blur-3xl animate-float" />
+          <div
+            className="absolute bottom-16 left-20 w-80 h-80 bg-indigo-500 rounded-full filter blur-3xl animate-float"
+            style={{ animationDelay: '1.5s' }}
+          />
         </div>
       </div>
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <div className="animate-fade-in-up">
-          <span className="inline-block px-4 py-2 bg-white/10 backdrop-blur-sm rounded-full text-blue-200 text-sm font-medium mb-6 border border-white/20">🚀 منصة الإعلانات الأولى للموزعين والتجار في مصر</span>
-        </div>
-        <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold text-white mb-6 animate-fade-in-up-delay-1 leading-tight">
-          أوصل إعلانك لآلاف<br />
-          <span className="bg-gradient-to-l from-yellow-300 to-orange-400 bg-clip-text text-transparent">الموزعين والتجار</span>
+
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <p className="text-blue-200 text-sm md:text-base font-medium mb-4 animate-fade-in-up">
+          منصة الإعلانات المتخصصة للموزعين والتجار في جمهورية مصر العربية
+        </p>
+
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-white mb-6 animate-fade-in-up-delay-1 leading-tight max-w-4xl mx-auto [text-wrap:balance]">
+          أوصل إعلانك لآلاف{' '}
+          <span className="text-amber-400">الموزعين والتجار</span> في جميع المحافظات
         </h1>
-        <p className="text-lg md:text-xl text-blue-100 mb-10 max-w-3xl mx-auto animate-fade-in-up-delay-2">منصة متكاملة لنشر إعلاناتك والوصول إلى شبكة واسعة من الموزعين والتجار والمحلات التجارية في جميع أنحاء جمهورية مصر العربية</p>
-        <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-in-up-delay-3">
-          <button onClick={onAddAd} className="bg-gradient-to-l from-yellow-400 to-orange-500 text-gray-900 px-8 py-4 rounded-xl font-bold text-lg hover:shadow-2xl transition-all duration-300 hover:scale-105">أضف إعلانك مجاناً ✨</button>
-          <a href="#ads" className="bg-white/10 backdrop-blur-sm border border-white/30 text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-white/20 transition-all duration-300">تصفح الإعلانات 🔍</a>
+
+        <p className="text-base sm:text-lg md:text-xl text-slate-200 mb-10 max-w-2xl mx-auto leading-relaxed animate-fade-in-up-delay-2">
+          انشر عروض الجملة والتوزيع والمحلات التجارية في دقائق، وتواصل مباشرة مع التجار المهتمين وإدارة المنصة دون وسطاء.
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-4 justify-center items-center animate-fade-in-up-delay-3">
+          <button
+            type="button"
+            onClick={onAddAd}
+            className="w-full sm:w-auto bg-amber-400 hover:bg-amber-300 text-slate-950 px-8 py-4 rounded-xl font-extrabold text-base md:text-lg transition-colors whitespace-nowrap shrink-0 shadow-lg shadow-amber-500/20"
+          >
+            أضف إعلانك الآن
+          </button>
+          <a
+            href="#ads"
+            className="w-full sm:w-auto bg-white/10 hover:bg-white/15 border border-white/25 text-white px-8 py-4 rounded-xl font-bold text-base md:text-lg transition-colors whitespace-nowrap shrink-0"
+          >
+            تصفح الإعلانات المتاحة
+          </a>
         </div>
-        <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
-          {[{ icon: '📦', label: 'توزيع' }, { icon: '🏪', label: 'محلات تجارية' }, { icon: '🤝', label: 'شراكات' }, { icon: '📈', label: 'نمو الأعمال' }].map((item, i) => (
-            <div key={i} className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-4 text-center hover:bg-white/20 transition-all cursor-pointer">
-              <span className="text-3xl mb-2 block">{item.icon}</span>
-              <span className="text-white text-sm font-medium">{item.label}</span>
-            </div>
+
+        <div className="mt-14 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
+          {quickCategories.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => handleCategoryJump(item.category)}
+              className="bg-white/10 hover:bg-white/15 border border-white/15 rounded-2xl p-4 text-center transition-colors cursor-pointer group focus-visible:outline-2 focus-visible:outline-amber-400"
+            >
+              <span className="text-2xl mb-2 block" aria-hidden="true">
+                {item.icon}
+              </span>
+              <span className="text-white text-sm font-semibold group-hover:text-amber-300 transition-colors">
+                {item.label}
+              </span>
+            </button>
           ))}
         </div>
       </div>

@@ -1,48 +1,144 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Menu, X } from 'lucide-react';
 
-interface NavbarProps { onAddAd: () => void; }
+interface NavbarProps {
+  siteName: string;
+  onAddAd: () => void;
+}
 
-export default function Navbar({ onAddAd }: NavbarProps) {
+export default function Navbar({ siteName, onAddAd }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
+
   return (
-    <nav className="fixed top-0 right-0 left-0 z-50 bg-white/90 backdrop-blur-md shadow-sm">
+    <header className="fixed top-0 right-0 left-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center">
-              <span className="text-white font-bold text-lg">إ</span>
-            </div>
-            <span className="text-xl font-bold text-gray-800">إعلاناتي</span>
+        <div className="flex justify-between items-center h-16 gap-8">
+          <a
+            href="#home"
+            className="text-xl font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-blue-600 rounded"
+          >
+            {siteName}
+          </a>
+
+          <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600">
+            <a
+              href="#home"
+              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              الرئيسية
+            </a>
+            <a
+              href="#features"
+              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              المميزات
+            </a>
+            <a
+              href="#packages"
+              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              الباقات
+            </a>
+            <a
+              href="#ads"
+              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              الإعلانات
+            </a>
+            <a
+              href="#contact"
+              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              تواصل معنا
+            </a>
+            <Link
+              to="/admin"
+              className="text-slate-700 hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              لوحة المدير
+            </Link>
+          </nav>
+
+          <div className="hidden md:flex items-center shrink-0">
+            <button
+              type="button"
+              onClick={onAddAd}
+              className="bg-blue-700 hover:bg-blue-800 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700"
+            >
+              أضف إعلانك
+            </button>
           </div>
-          <div className="hidden md:flex items-center gap-8">
-            <a href="#home" className="text-gray-600 hover:text-blue-600 transition-colors font-medium">الرئيسية</a>
-            <a href="#features" className="text-gray-600 hover:text-blue-600 transition-colors font-medium">المميزات</a>
-            <a href="#packages" className="text-gray-600 hover:text-blue-600 transition-colors font-medium">الباقات</a>
-            <a href="#ads" className="text-gray-600 hover:text-blue-600 transition-colors font-medium">الإعلانات</a>
-            <a href="#contact" className="text-gray-600 hover:text-blue-600 transition-colors font-medium">تواصل معنا</a>
-          </div>
-          <div className="hidden md:block">
-            <button onClick={onAddAd} className="bg-gradient-to-l from-blue-600 to-purple-600 text-white px-6 py-2.5 rounded-xl font-medium hover:shadow-lg hover:shadow-blue-500/30 transition-all duration-300">أضف إعلانك</button>
-          </div>
-          <button onClick={() => setIsOpen(!isOpen)} className="md:hidden p-2 rounded-lg hover:bg-gray-100">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              {isOpen ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
-            </svg>
+
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            aria-label={isOpen ? 'إغلاق القائمة' : 'فتح القائمة'}
+            className="md:hidden p-2.5 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            {isOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
           </button>
         </div>
+
         {isOpen && (
-          <div className="md:hidden pb-4 border-t">
-            <div className="flex flex-col gap-3 pt-4">
-              <a href="#home" className="text-gray-600 hover:text-blue-600 font-medium px-2 py-1">الرئيسية</a>
-              <a href="#features" className="text-gray-600 hover:text-blue-600 font-medium px-2 py-1">المميزات</a>
-              <a href="#packages" className="text-gray-600 hover:text-blue-600 font-medium px-2 py-1">الباقات</a>
-              <a href="#ads" className="text-gray-600 hover:text-blue-600 font-medium px-2 py-1">الإعلانات</a>
-              <a href="#contact" className="text-gray-600 hover:text-blue-600 font-medium px-2 py-1">تواصل معنا</a>
-              <button onClick={onAddAd} className="bg-gradient-to-l from-blue-600 to-purple-600 text-white px-6 py-2.5 rounded-xl font-medium mt-2">أضف إعلانك</button>
+          <div className="md:hidden pb-5 pt-3 border-t border-slate-100">
+            <div className="flex flex-col gap-2">
+              <a
+                href="#home"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                الرئيسية
+              </a>
+              <a
+                href="#features"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                المميزات
+              </a>
+              <a
+                href="#packages"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                الباقات
+              </a>
+              <a
+                href="#ads"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                الإعلانات
+              </a>
+              <a
+                href="#contact"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                تواصل معنا
+              </a>
+              <Link
+                to="/admin"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                لوحة المدير
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  onAddAd();
+                }}
+                className="bg-blue-700 hover:bg-blue-800 text-white px-6 py-3 rounded-xl font-bold mt-2 text-center"
+              >
+                أضف إعلانك
+              </button>
             </div>
           </div>
         )}
       </div>
-    </nav>
+    </header>
   );
 }

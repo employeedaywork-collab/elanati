@@ -1,32 +1,221 @@
-export default function Footer() {
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { X } from 'lucide-react';
+import { AdCategory, SiteSettings } from '../types';
+
+interface FooterProps {
+  settings: SiteSettings;
+  onAddAd: () => void;
+  onSelectCategory: (category: AdCategory | 'الكل') => void;
+}
+
+type InfoModalType = 'faq' | 'privacy' | 'terms' | null;
+
+export default function Footer({ settings, onAddAd, onSelectCategory }: FooterProps) {
+  const [infoModal, setInfoModal] = useState<InfoModalType>(null);
+
+  const handleCategoryClick = (category: AdCategory) => {
+    onSelectCategory(category);
+    const el = document.getElementById('ads');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
-    <footer className="bg-gray-900 text-white">
-      <div className="border-b border-gray-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">جاهز لنشر إعلانك؟</h2>
-          <p className="text-gray-400 text-lg mb-8 max-w-2xl mx-auto">انضم لآلاف التجار والموزعين الذين يثقون بمنصتنا لتنمية أعمالهم</p>
-          <a href="#home" className="inline-block bg-gradient-to-l from-blue-600 to-purple-600 text-white px-8 py-4 rounded-xl font-bold text-lg hover:shadow-2xl hover:shadow-blue-500/30 transition-all duration-300 hover:scale-105">ابدأ الآن مجاناً 🚀</a>
-        </div>
-      </div>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-          <div className="md:col-span-1">
-            <div className="flex items-center gap-2 mb-4"><div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-500 rounded-xl flex items-center justify-center"><span className="text-white font-bold text-lg">إ</span></div><span className="text-xl font-bold">إعلاناتي</span></div>
-            <p className="text-gray-400 text-sm leading-relaxed">منصة إعلانية متكاملة مخصصة للموزعين والتجار والمحلات التجارية في جمهورية مصر العربية</p>
-          </div>
-          <div><h4 className="font-bold text-lg mb-4">روابط سريعة</h4><ul className="space-y-3"><li><a href="#home" className="text-gray-400 hover:text-white transition-colors">الرئيسية</a></li><li><a href="#features" className="text-gray-400 hover:text-white transition-colors">المميزات</a></li><li><a href="#packages" className="text-gray-400 hover:text-white transition-colors">الباقات</a></li><li><a href="#ads" className="text-gray-400 hover:text-white transition-colors">الإعلانات</a></li></ul></div>
-          <div><h4 className="font-bold text-lg mb-4">التصنيفات</h4><ul className="space-y-3"><li><a href="#ads" className="text-gray-400 hover:text-white transition-colors">توزيع</a></li><li><a href="#ads" className="text-gray-400 hover:text-white transition-colors">تجارة</a></li><li><a href="#ads" className="text-gray-400 hover:text-white transition-colors">محلات تجارية</a></li><li><a href="#ads" className="text-gray-400 hover:text-white transition-colors">عروض وخصومات</a></li></ul></div>
-          <div><h4 className="font-bold text-lg mb-4">الدعم</h4><ul className="space-y-3"><li><a href="#contact" className="text-gray-400 hover:text-white transition-colors">تواصل معنا</a></li><li><a href="#" className="text-gray-400 hover:text-white transition-colors">الأسئلة الشائعة</a></li><li><a href="#" className="text-gray-400 hover:text-white transition-colors">سياسة الخصوصية</a></li><li><a href="#" className="text-gray-400 hover:text-white transition-colors">الشروط والأحكام</a></li></ul></div>
-        </div>
-      </div>
-      <div className="border-t border-gray-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-gray-500 text-sm">© 2024 إعلاناتي. جميع الحقوق محفوظة</p>
-            <div className="flex items-center gap-4"><span className="text-gray-500 text-sm">صنع بـ ❤️ في مصر</span></div>
+    <>
+      <footer className="bg-slate-950 text-white">
+        <div className="border-b border-slate-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 text-center">
+            <h2 className="text-2xl md:text-3xl font-extrabold mb-3">
+              جاهز لنشر إعلانك والوصول للموزعين؟
+            </h2>
+            <p className="text-slate-400 text-base mb-7 max-w-xl mx-auto">
+              انضم للتجار والموزعين في جميع محافظات مصر وابدأ باستقبال طلبات العملاء اليوم.
+            </p>
+            <button
+              type="button"
+              onClick={onAddAd}
+              className="bg-amber-400 hover:bg-amber-300 text-slate-950 px-8 py-3.5 rounded-xl font-extrabold text-base transition-colors"
+            >
+              أضف إعلانك الآن
+            </button>
           </div>
         </div>
-      </div>
-    </footer>
+
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+            <div>
+              <h3 className="text-xl font-extrabold mb-3">{settings.site_name}</h3>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                منصة إعلانية متكاملة مخصصة للموزعين والتجار والمحلات التجارية في {settings.location_text}.
+              </p>
+            </div>
+
+            <div>
+              <h4 className="font-bold text-base mb-4">روابط سريعة</h4>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="#home" className="text-slate-400 hover:text-white transition-colors">
+                    الرئيسية
+                  </a>
+                </li>
+                <li>
+                  <a href="#features" className="text-slate-400 hover:text-white transition-colors">
+                    المميزات
+                  </a>
+                </li>
+                <li>
+                  <a href="#packages" className="text-slate-400 hover:text-white transition-colors">
+                    الباقات والأسعار
+                  </a>
+                </li>
+                <li>
+                  <a href="#ads" className="text-slate-400 hover:text-white transition-colors">
+                    تصفح الإعلانات
+                  </a>
+                </li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="font-bold text-base mb-4">التصنيفات</h4>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => handleCategoryClick('توزيع')}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    توزيع
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => handleCategoryClick('تجارة')}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    تجارة وجملة
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => handleCategoryClick('محلات')}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    محلات تجارية
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="font-bold text-base mb-4">الدعم والإدارة</h4>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="#contact" className="text-slate-400 hover:text-white transition-colors">
+                    تواصل معنا
+                  </a>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setInfoModal('faq')}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    الأسئلة الشائعة
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setInfoModal('privacy')}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    سياسة الخصوصية
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setInfoModal('terms')}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    الشروط والأحكام
+                  </button>
+                </li>
+                <li>
+                  <Link to="/admin" className="text-amber-400 hover:text-amber-300 font-bold transition-colors">
+                    دخول لوحة تحكم المدير
+                  </Link>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-slate-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-slate-400">
+            <p>© {new Date().getFullYear()} {settings.site_name}. جميع الحقوق محفوظة.</p>
+            <p className="tabular-nums">
+              {settings.contact_phone} · {settings.contact_email}
+            </p>
+          </div>
+        </div>
+      </footer>
+
+      {infoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-slate-950/65 backdrop-blur-sm" onClick={() => setInfoModal(null)} />
+          <div className="relative bg-white text-slate-900 rounded-3xl w-full max-w-xl max-h-[85vh] overflow-y-auto shadow-2xl border border-slate-200">
+            <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-extrabold">
+                {infoModal === 'faq' && 'الأسئلة الشائعة'}
+                {infoModal === 'privacy' && 'سياسة الخصوصية'}
+                {infoModal === 'terms' && 'الشروط والأحكام'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setInfoModal(null)}
+                aria-label="إغلاق"
+                className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 text-sm text-slate-700 leading-relaxed">
+              {infoModal === 'faq' && (
+                <>
+                  <div>
+                    <h4 className="font-bold text-slate-900 mb-1">كيف أضيف إعلاني على منصة إعلاناتي؟</h4>
+                    <p>اضغط على زر "أضف إعلانك" في الأعلى، واختر التصنيف والمحافظة ورقم التواصل، وسيتم مراجعته واعتماده من إدارة المنصة.</p>
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-900 mb-1">كيف أتابع ردود إدارة المنصة على استفساري؟</h4>
+                    <p>بعد إرسال أي رسالة تحصل على كود متابعة مثل ELN-12345، يمكنك إدخاله في نافذة "تواصل مع الإدارة" أسفل الشاشة لمحادثة المدير مباشرة.</p>
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-900 mb-1">كيف أميز إعلاني ليظهر في الصدارة؟</h4>
+                    <p>اختر الباقة الاحترافية أو المؤسسية من قسم الباقات وأرسل طلب التفعيل أو تواصل معنا مباشرة عبر الواتساب.</p>
+                  </div>
+                </>
+              )}
+              {infoModal === 'privacy' && (
+                <>
+                  <p>تلتزم منصة {settings.site_name} بحماية بيانات المعلنين والتجار وعدم مشاركة بيانات التواصل الخاصة بالرسائل والتذاكر مع أي طرف ثالث.</p>
+                  <p>أرقام الهواتف المرفقة في الإعلانات المنشورة تظهر للزوار لغرض التواصل التجاري المباشر بين التجار والموزعين فقط.</p>
+                </>
+              )}
+              {infoModal === 'terms' && (
+                <>
+                  <p>يجب أن تكون جميع الإعلانات المضافة حقيقية ومتوافقة مع القوانين التجارية في جمهورية مصر العربية.</p>
+                  <p>تحتفظ إدارة المنصة بحق مراجعة الإعلانات أو رفض أو أرشفة أي إعلان مخالف أو غير دقيق لحماية جودة المنصة.</p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

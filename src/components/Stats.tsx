@@ -1,37 +1,86 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { SiteSettings } from '../types';
 
-function AnimatedCounter({ end, duration = 2000, suffix = '' }: { end: number; duration?: number; suffix?: string }) {
-  const [count, setCount] = useState(0);
+function AnimatedCounter({
+  end,
+  duration = 1400,
+  suffix = '',
+}: {
+  end: number;
+  duration?: number;
+  suffix?: string;
+}) {
+  const [count, setCount] = useState(end);
   const ref = useRef<HTMLDivElement>(null);
-  const [isVisible, setIsVisible] = useState(false);
+  const [hasAnimated, setHasAnimated] = useState(false);
+
   useEffect(() => {
-    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) setIsVisible(true); }, { threshold: 0.3 });
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !hasAnimated) {
+          setHasAnimated(true);
+        }
+      },
+      { threshold: 0.25 }
+    );
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
-  }, []);
+  }, [hasAnimated]);
+
   useEffect(() => {
-    if (!isVisible) return;
-    let startTime: number;
+    if (!hasAnimated) {
+      setCount(end);
+      return;
+    }
+    let startTime = 0;
+    let rafId = 0;
     const animate = (currentTime: number) => {
       if (!startTime) startTime = currentTime;
       const progress = Math.min((currentTime - startTime) / duration, 1);
       setCount(Math.floor(progress * end));
-      if (progress < 1) requestAnimationFrame(animate);
+      if (progress < 1) {
+        rafId = requestAnimationFrame(animate);
+      } else {
+        setCount(end);
+      }
     };
-    requestAnimationFrame(animate);
-  }, [isVisible, end, duration]);
-  return <div ref={ref} className="text-4xl md:text-5xl font-bold text-white">{count.toLocaleString('ar-SA')}{suffix}</div>;
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
+  }, [hasAnimated, end, duration]);
+
+  return (
+    <div ref={ref} className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-white tabular-nums">
+      {count.toLocaleString('en-US')}
+      {suffix}
+    </div>
+  );
 }
 
-export default function Stats() {
+interface StatsProps {
+  settings: SiteSettings;
+}
+
+export default function Stats({ settings }: StatsProps) {
   return (
-    <section className="relative -mt-16 z-20 max-w-6xl mx-auto px-4">
-      <div className="bg-gradient-to-l from-blue-600 to-purple-600 rounded-3xl p-8 md:p-12 shadow-2xl shadow-blue-500/20">
+    <section className="relative -mt-14 z-20 max-w-6xl mx-auto px-4">
+      <div className="bg-blue-700 rounded-3xl p-8 md:p-10 shadow-xl border border-blue-600">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-          <div><AnimatedCounter end={5000} suffix="+" /><p className="text-blue-100 mt-2 font-medium">معلن نشط</p></div>
-          <div><AnimatedCounter end={12000} suffix="+" /><p className="text-blue-100 mt-2 font-medium">زيارة شهرية</p></div>
-          <div><AnimatedCounter end={3500} suffix="+" /><p className="text-blue-100 mt-2 font-medium">تاجر وموزع</p></div>
-          <div><AnimatedCounter end={98} suffix="%" /><p className="text-blue-100 mt-2 font-medium">نسبة الرضا</p></div>
+          <div>
+            <AnimatedCounter end={settings.stat_advertisers} suffix="+" />
+            <p className="text-blue-100 mt-2 text-sm md:text-base font-medium">معلن نشط</p>
+          </div>
+          <div>
+            <AnimatedCounter end={settings.stat_visits} suffix="+" />
+            <p className="text-blue-100 mt-2 text-sm md:text-base font-medium">زيارة شهرية</p>
+          </div>
+          <div>
+            <AnimatedCounter end={settings.stat_traders} suffix="+" />
+            <p className="text-blue-100 mt-2 text-sm md:text-base font-medium">تاجر وموزع</p>
+          </div>
+          <div>
+            <AnimatedCounter end={settings.stat_satisfaction} suffix="%" />
+            <p className="text-blue-100 mt-2 text-sm md:text-base font-medium">نسبة رضا العملاء</p>
+          </div>
         </div>
       </div>
     </section>

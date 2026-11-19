@@ -1,0 +1,459 @@
+import { useState } from 'react';
+import { Check, Edit3, Plus, Search, Star, Trash2, X } from 'lucide-react';
+import { EGYPT_GOVERNORATES } from '../../data/seedData';
+import { createAd, deleteAdAdmin, updateAdAdmin } from '../../services/dataService';
+import { Ad, AdCategory, AdStatus } from '../../types';
+
+interface AdminAdsManagerProps {
+  ads: Ad[];
+  onRefresh: () => Promise<void>;
+}
+
+const STATUS_META: Record<AdStatus, { label: string; cls: string }> = {
+  pending: { label: 'قيد المراجعة', cls: 'bg-amber-50 text-amber-800 border border-amber-200' },
+  approved: { label: 'منشور', cls: 'bg-emerald-50 text-emerald-800 border border-emerald-200' },
+  rejected: { label: 'مرفوض', cls: 'bg-red-50 text-red-700 border border-red-200' },
+  archived: { label: 'مؤرشف', cls: 'bg-slate-100 text-slate-600 border border-slate-200' },
+};
+
+export default function AdminAdsManager({ ads, onRefresh }: AdminAdsManagerProps) {
+  const [statusFilter, setStatusFilter] = useState<AdStatus | 'all'>('all');
+  const [search, setSearch] = useState('');
+  const [editingAd, setEditingAd] = useState<Ad | null>(null);
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const [newAdForm, setNewAdForm] = useState({
+    title: '',
+    category: 'توزيع' as AdCategory,
+    description: '',
+    contact: '',
+    city: 'القاهرة',
+    image: '📦',
+    image_url: '',
+    featured: false,
+  });
+
+  const filtered = ads.filter((ad) => {
+    const matchesStatus = statusFilter === 'all' || ad.status === statusFilter;
+    const q = search.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      ad.title.toLowerCase().includes(q) ||
+      ad.city.toLowerCase().includes(q) ||
+      ad.contact.includes(q);
+    return matchesStatus && matchesSearch;
+  });
+
+  const handleStatusChange = async (id: string, status: AdStatus) => {
+    setBusyId(id);
+    try {
+      await updateAdAdmin(id, { status });
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleToggleFeatured = async (ad: Ad) => {
+    setBusyId(ad.id);
+    try {
+      await updateAdAdmin(ad.id, { featured: !ad.featured });
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setBusyId(id);
+    try {
+      await deleteAdAdmin(id);
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAd) return;
+    setBusyId(editingAd.id);
+    try {
+      await updateAdAdmin(editingAd.id, {
+        title: editingAd.title,
+        category: editingAd.category,
+        city: editingAd.city,
+        contact: editingAd.contact,
+        description: editingAd.description,
+        status: editingAd.status,
+        featured: editingAd.featured,
+        image_url: editingAd.image_url,
+      });
+      setEditingAd(null);
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleCreateAdminAd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusyId('new');
+    try {
+      await createAd({
+        ...newAdForm,
+        asAdmin: true,
+        requireApproval: false,
+      });
+      setCreatingNew(false);
+      setNewAdForm({
+        title: '',
+        category: 'توزيع',
+        description: '',
+        contact: '',
+        city: 'القاهرة',
+        image: '📦',
+        image_url: '',
+        featured: false,
+      });
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+        <div className="flex flex-col sm:flex-row gap-3 flex-1">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="بحث بالعنوان أو المحافظة أو الهاتف..."
+              className="w-full pr-10 pl-4 py-2.5 text-sm border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-600"
+            />
+          </div>
+
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl overflow-x-auto">
+            {(
+              [
+                ['all', 'الكل'],
+                ['pending', 'قيد المراجعة'],
+                ['approved', 'منشور'],
+                ['rejected', 'مرفوض'],
+                ['archived', 'مؤرشف'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setStatusFilter(key)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${
+                  statusFilter === key ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setCreatingNew(true)}
+          className="inline-flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          نشر إعلان مباشر
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center text-sm text-slate-500">
+            لا توجد إعلانات مطابقة لهذه التصفية.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
+                <tr>
+                  <th className="py-3.5 px-4">الإعلان</th>
+                  <th className="py-3.5 px-4">التصنيف والمحافظة</th>
+                  <th className="py-3.5 px-4">التواصل</th>
+                  <th className="py-3.5 px-4">المشاهدات</th>
+                  <th className="py-3.5 px-4">الحالة</th>
+                  <th className="py-3.5 px-4">الإجراءات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((ad) => (
+                  <tr key={ad.id} className="hover:bg-slate-50/70">
+                    <td className="py-3.5 px-4 max-w-xs">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-xl shrink-0">{ad.image}</span>
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 truncate">{ad.title}</p>
+                          <p className="text-xs text-slate-500 truncate">{ad.description}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap text-xs text-slate-700">
+                      {ad.category} · {ad.city}
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap tabular-nums text-xs font-semibold text-slate-700">
+                      {ad.contact}
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap tabular-nums text-xs font-bold text-slate-700">
+                      {ad.views_count}
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <span
+                        className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg ${
+                          STATUS_META[ad.status]?.cls || 'bg-slate-100'
+                        }`}
+                      >
+                        {STATUS_META[ad.status]?.label || ad.status}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        {ad.status !== 'approved' && (
+                          <button
+                            type="button"
+                            disabled={busyId === ad.id}
+                            onClick={() => void handleStatusChange(ad.id, 'approved')}
+                            title="اعتماد ونشر"
+                            className="p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                        )}
+                        {ad.status === 'pending' && (
+                          <button
+                            type="button"
+                            disabled={busyId === ad.id}
+                            onClick={() => void handleStatusChange(ad.id, 'rejected')}
+                            title="رفض"
+                            className="p-2 rounded-lg bg-red-50 text-red-700 hover:bg-red-100"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busyId === ad.id}
+                          onClick={() => void handleToggleFeatured(ad)}
+                          title={ad.featured ? 'إزالة التمييز' : 'تمييز الإعلان'}
+                          className={`p-2 rounded-lg transition-colors ${
+                            ad.featured
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-100 text-slate-500 hover:text-amber-700'
+                          }`}
+                        >
+                          <Star className={`w-4 h-4 ${ad.featured ? 'fill-amber-400' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingAd(ad)}
+                          title="تعديل"
+                          className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyId === ad.id}
+                          onClick={() => void handleDelete(ad.id)}
+                          title="حذف"
+                          className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {editingAd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-slate-950/60" onClick={() => setEditingAd(null)} />
+          <form
+            onSubmit={handleSaveEdit}
+            className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-lg text-slate-900">تعديل الإعلان</h3>
+              <button type="button" onClick={() => setEditingAd(null)} className="p-1.5 rounded-lg hover:bg-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <input
+              type="text"
+              required
+              value={editingAd.title}
+              onChange={(e) => setEditingAd({ ...editingAd, title: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm"
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <select
+                value={editingAd.category}
+                onChange={(e) =>
+                  setEditingAd({ ...editingAd, category: e.target.value as AdCategory })
+                }
+                className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                <option value="توزيع">توزيع</option>
+                <option value="تجارة">تجارة</option>
+                <option value="محلات">محلات</option>
+              </select>
+              <select
+                value={editingAd.city}
+                onChange={(e) => setEditingAd({ ...editingAd, city: e.target.value })}
+                className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                {EGYPT_GOVERNORATES.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="tel"
+                required
+                value={editingAd.contact}
+                onChange={(e) => setEditingAd({ ...editingAd, contact: e.target.value })}
+                className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums"
+              />
+              <select
+                value={editingAd.status}
+                onChange={(e) =>
+                  setEditingAd({ ...editingAd, status: e.target.value as AdStatus })
+                }
+                className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                <option value="pending">قيد المراجعة</option>
+                <option value="approved">منشور</option>
+                <option value="rejected">مرفوض</option>
+                <option value="archived">مؤرشف</option>
+              </select>
+            </div>
+            <textarea
+              rows={4}
+              required
+              value={editingAd.description}
+              onChange={(e) => setEditingAd({ ...editingAd, description: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm resize-none"
+            />
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={editingAd.featured}
+                onChange={(e) => setEditingAd({ ...editingAd, featured: e.target.checked })}
+              />
+              تمييز الإعلان في أعلى النتائج
+            </label>
+            <button
+              type="submit"
+              disabled={busyId === editingAd.id}
+              className="w-full bg-blue-700 hover:bg-blue-800 text-white py-3 rounded-xl font-bold text-sm"
+            >
+              حفظ التعديلات
+            </button>
+          </form>
+        </div>
+      )}
+
+      {creatingNew && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-slate-950/60" onClick={() => setCreatingNew(false)} />
+          <form
+            onSubmit={handleCreateAdminAd}
+            className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-lg text-slate-900">نشر إعلان مباشر من الإدارة</h3>
+              <button type="button" onClick={() => setCreatingNew(false)} className="p-1.5 rounded-lg hover:bg-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <input
+              type="text"
+              required
+              placeholder="عنوان الإعلان"
+              value={newAdForm.title}
+              onChange={(e) => setNewAdForm({ ...newAdForm, title: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm"
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <select
+                value={newAdForm.category}
+                onChange={(e) =>
+                  setNewAdForm({ ...newAdForm, category: e.target.value as AdCategory })
+                }
+                className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                <option value="توزيع">توزيع</option>
+                <option value="تجارة">تجارة</option>
+                <option value="محلات">محلات</option>
+              </select>
+              <select
+                value={newAdForm.city}
+                onChange={(e) => setNewAdForm({ ...newAdForm, city: e.target.value })}
+                className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                {EGYPT_GOVERNORATES.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <input
+              type="tel"
+              required
+              placeholder="رقم التواصل (01xxxxxxxxx)"
+              value={newAdForm.contact}
+              onChange={(e) => setNewAdForm({ ...newAdForm, contact: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums"
+            />
+            <textarea
+              rows={4}
+              required
+              placeholder="تفاصيل الإعلان..."
+              value={newAdForm.description}
+              onChange={(e) => setNewAdForm({ ...newAdForm, description: e.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm resize-none"
+            />
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newAdForm.featured}
+                onChange={(e) => setNewAdForm({ ...newAdForm, featured: e.target.checked })}
+              />
+              نشر كإعلان مميز
+            </label>
+            <button
+              type="submit"
+              disabled={busyId === 'new'}
+              className="w-full bg-blue-700 hover:bg-blue-800 text-white py-3 rounded-xl font-bold text-sm"
+            >
+              نشر فوري
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,6 @@
+{
+  "name": "إعلاناتي - Elanati",
+  "description": "منصة الإعلانات للموزعين والتجار في مصر",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -80,6 +80,11 @@ export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPort
                   </a>
                 </li>
                 <li>
+                  <a href="#subscriptions" className="text-slate-400 hover:text-white transition-colors">
+                    قسم الاشتراكات والدفعات
+                  </a>
+                </li>
+                <li>
                   <a href="#ads" className="text-slate-400 hover:text-white transition-colors">
                     تصفح الإعلانات
                   </a>

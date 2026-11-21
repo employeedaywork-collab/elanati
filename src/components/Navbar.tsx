@@ -43,6 +43,12 @@ export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPorta
               الباقات
             </a>
             <a
+              href="#subscriptions"
+              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              الاشتراكات
+            </a>
+            <a
               href="#ads"
               className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
             >
@@ -115,6 +121,13 @@ export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPorta
                 className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
               >
                 الباقات
+              </a>
+              <a
+                href="#subscriptions"
+                onClick={() => setIsOpen(false)}
+                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
+              >
+                الاشتراكات والدفعات
               </a>
               <a
                 href="#ads"

@@ -11,6 +11,7 @@ import Navbar from '../components/Navbar';
 import PackageRequestModal from '../components/PackageRequestModal';
 import Packages from '../components/Packages';
 import Stats from '../components/Stats';
+import SubscriptionsSection from '../components/SubscriptionsSection';
 import SupportWidget from '../components/SupportWidget';
 import Testimonials from '../components/Testimonials';
 import {
@@ -226,6 +227,20 @@ export default function HomePage() {
     setSupportOpen(true);
   };
 
+  const handleRequestAdminEdit = (ad: Ad) => {
+    setSupportPrefillSubject(`طلب تعديل إعلان عبر الإدارة: ${ad.title}`);
+    setSupportPrefillAdId(ad.id);
+    setSupportInitialTab('new');
+    setSupportOpen(true);
+  };
+
+  const handleRequestSupportTicket = (subject: string) => {
+    setSupportPrefillSubject(subject);
+    setSupportPrefillAdId(null);
+    setSupportInitialTab('new');
+    setSupportOpen(true);
+  };
+
   const handleTicketCreated = (ticketCode: string) => {
     setActiveTicketCode(ticketCode);
     setSupportInitialTab('track');
@@ -246,6 +261,15 @@ export default function HomePage() {
         <Stats settings={settings} />
         <Features />
         <Packages packages={packages} onSelectPackage={handleSelectPackage} />
+        <SubscriptionsSection
+          settings={settings}
+          categories={categories}
+          onAddAd={handleOpenAddAd}
+          onUpgrade={scrollToPackages}
+          onRequestAdminEdit={handleRequestAdminEdit}
+          onRequestSupportTicket={handleRequestSupportTicket}
+          onAdUpdated={loadData}
+        />
         <Advertisements
           ads={ads}
           categories={categories}
@@ -298,10 +322,14 @@ export default function HomePage() {
       {portalOpen && (
         <ClientSubscriptionModal
           settings={settings}
+          categories={categories}
           initialQuery={portalQuery}
           onClose={() => setPortalOpen(false)}
           onAddAd={handleOpenAddAd}
           onUpgrade={scrollToPackages}
+          onRequestAdminEdit={handleRequestAdminEdit}
+          onRequestSupportTicket={handleRequestSupportTicket}
+          onAdUpdated={loadData}
         />
       )}
 

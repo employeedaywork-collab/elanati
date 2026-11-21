@@ -27,6 +27,9 @@ export default function AdminOverview({
   const totalViews = ads.reduce((acc, ad) => acc + (ad.views_count || 0), 0);
   const openTickets = tickets.filter((t) => t.status === 'new' || t.status === 'in_progress');
   const pendingPackages = packageRequests.filter((r) => r.status === 'pending');
+  const confirmedEgp = packageRequests
+    .filter((r) => r.status === 'activated')
+    .reduce((sum, r) => sum + Number(r.price_egp || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -59,15 +62,24 @@ export default function AdminOverview({
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5">
           <div className="flex items-center justify-between text-slate-500 text-xs font-bold mb-2">
-            <span>طلبات الباقات الجديدة</span>
+            <span>الاشتراكات والدفعات</span>
             <Layers className="w-4 h-4 text-emerald-600" />
           </div>
-          <p className="text-3xl font-extrabold text-slate-900 tabular-nums">
-            {pendingPackages.length}
+          <p className="text-2xl font-extrabold text-emerald-700 tabular-nums">
+            {confirmedEgp.toLocaleString('en-US')} ج.م
           </p>
-          <p className="text-xs text-slate-500 mt-1 tabular-nums">
-            من أصل {packageRequests.length} طلب اشتراك
-          </p>
+          <div className="flex items-center justify-between gap-2 mt-1">
+            <p className="text-xs text-slate-500 tabular-nums">
+              {pendingPackages.length} بانتظار التأكيد · {packageRequests.length} إجمالي
+            </p>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('packages')}
+              className="text-[11px] font-bold text-blue-700 hover:text-blue-900 shrink-0"
+            >
+              متابعة ←
+            </button>
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5">

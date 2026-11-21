@@ -29,6 +29,8 @@ export interface Ad {
   status: AdStatus;
   featured: boolean;
   views_count: number;
+  client_edits_count?: number;
+  last_client_edited_at?: string | null;
   admin_note?: string | null;
   starts_at?: string;
   expires_at?: string | null;
@@ -161,6 +163,7 @@ export interface AdAllowance {
 
 export interface ClientPortalData {
   subscription: PackageRequest | null;
+  payments: PackageRequest[];
   ads: Ad[];
 }
 

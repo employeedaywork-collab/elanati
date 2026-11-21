@@ -149,6 +149,7 @@ export default function AdminAdsManager({
         image_url: editingAd.image_url,
         banner_url: editingAd.banner_url,
         expires_at: editingAd.expires_at ?? null,
+        client_edits_count: editingAd.client_edits_count ?? 0,
       });
       setEditingAd(null);
       setEditCustomCategory('');
@@ -319,17 +320,24 @@ export default function AdminAdsManager({
                         {ad.views_count}
                       </td>
                       <td className="py-3.5 px-4 whitespace-nowrap">
-                        <span
-                          className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg ${
-                            expired && ad.status === 'approved'
-                              ? 'bg-red-50 text-red-700 border border-red-200'
-                              : STATUS_META[ad.status]?.cls || 'bg-slate-100'
-                          }`}
-                        >
-                          {expired && ad.status === 'approved'
-                            ? 'منتهي تلقائياً'
-                            : STATUS_META[ad.status]?.label || ad.status}
-                        </span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span
+                            className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg ${
+                              expired && ad.status === 'approved'
+                                ? 'bg-red-50 text-red-700 border border-red-200'
+                                : STATUS_META[ad.status]?.cls || 'bg-slate-100'
+                            }`}
+                          >
+                            {expired && ad.status === 'approved'
+                              ? 'منتهي تلقائياً'
+                              : STATUS_META[ad.status]?.label || ad.status}
+                          </span>
+                          {(ad.client_edits_count || 0) >= 1 && (
+                            <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 tabular-nums">
+                              عدّله المعلن (1/1)
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3.5 px-4 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
@@ -578,6 +586,20 @@ export default function AdminAdsManager({
               />
               تمييز الإعلان في أعلى النتائج
             </label>
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs">
+              <span className="font-bold text-slate-700 tabular-nums">
+                تعديل المعلن الذاتي: {(editingAd.client_edits_count || 0) >= 1 ? 'مُستخدم (1/1)' : 'متاح (0/1)'}
+              </span>
+              {(editingAd.client_edits_count || 0) >= 1 && (
+                <button
+                  type="button"
+                  onClick={() => setEditingAd({ ...editingAd, client_edits_count: 0 })}
+                  className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold"
+                >
+                  إتاحة تعديل جديد للمعلن
+                </button>
+              )}
+            </div>
             <button
               type="submit"
               disabled={busyId === editingAd.id}

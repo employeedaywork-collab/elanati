@@ -58,10 +58,22 @@ export default function SupportWidget({
   }, [initialTab]);
 
   useEffect(() => {
-    if (prefillSubject) {
-      setNewForm((prev) => ({ ...prev, subject: prefillSubject }));
+    if (!isOpen) return;
+    try {
+      const savedName = localStorage.getItem('elanati_last_client_name') || '';
+      const savedPhone = localStorage.getItem('elanati_last_client_phone') || '';
+      setNewForm((prev) => ({
+        ...prev,
+        name: prev.name || savedName,
+        phone: prev.phone || savedPhone,
+        subject: prefillSubject || prev.subject,
+      }));
+    } catch {
+      if (prefillSubject) {
+        setNewForm((prev) => ({ ...prev, subject: prefillSubject }));
+      }
     }
-  }, [prefillSubject]);
+  }, [isOpen, prefillSubject]);
 
   useEffect(() => {
     const saved = activeTicketCode || localStorage.getItem('elanati_last_ticket_code') || '';
@@ -150,6 +162,9 @@ export default function SupportWidget({
       try {
         localStorage.setItem('elanati_last_ticket_code', created.ticket_code);
         localStorage.setItem('elanati_last_client_name', newForm.name.trim());
+        if (newForm.phone.trim()) {
+          localStorage.setItem('elanati_last_client_phone', newForm.phone.trim());
+        }
       } catch {
         // ignore
       }

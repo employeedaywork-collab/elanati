@@ -58,7 +58,7 @@ const TAB_TITLES: Record<AdminTab, string> = {
   overview: 'نظرة عامة',
   ads: 'إدارة الإعلانات',
   inbox: 'مركز التواصل والرسائل',
-  packages: 'الباقات وطلبات الاشتراك',
+  packages: 'متابعة الاشتراكات والدفعات',
   automation: 'الأتمتة والواتساب',
   settings: 'المحتوى والإعدادات',
 };
@@ -235,7 +235,7 @@ export default function AdminPage() {
     { id: 'overview', label: 'نظرة عامة', icon: LayoutDashboard },
     { id: 'ads', label: 'إدارة الإعلانات', icon: Megaphone, badge: pendingAdsCount },
     { id: 'inbox', label: 'تواصل العملاء', icon: Inbox, badge: openTicketsCount },
-    { id: 'packages', label: 'الباقات والطلبات', icon: Layers, badge: pendingPackagesCount },
+    { id: 'packages', label: 'متابعة الاشتراكات والدفعات', icon: Layers, badge: pendingPackagesCount },
     { id: 'automation', label: 'الأتمتة والواتساب', icon: Bot },
     { id: 'settings', label: 'المحتوى والإعدادات', icon: Settings },
   ];

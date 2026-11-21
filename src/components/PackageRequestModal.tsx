@@ -187,25 +187,25 @@ export default function PackageRequestModal({
             </div>
 
             <div className="space-y-2.5 pt-2">
-              <a
-                href={whatsappUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-xl font-bold text-sm transition-colors"
-              >
-                <MessageCircle className="w-4 h-4" />
-                إرسال صورة الإيصال وتأكيد التفعيل عبر واتساب
-              </a>
               <button
                 type="button"
                 onClick={() => {
                   onClose();
                   onOpenPortal(createdCode);
                 }}
-                className="w-full bg-blue-700 hover:bg-blue-800 text-white py-3 rounded-xl font-bold text-sm transition-colors"
+                className="w-full bg-blue-700 hover:bg-blue-800 text-white py-3.5 rounded-xl font-bold text-sm transition-colors"
               >
-                متابعة اشتراكي والعدّاد التنازلي الآن
+                متابعة الدفع والاشتراك داخل المنصة الآن
               </button>
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 py-3 rounded-xl font-bold text-xs transition-colors"
+              >
+                <MessageCircle className="w-4 h-4" />
+                إرسال الإيصال عبر واتساب (اختياري)
+              </a>
               <button
                 type="button"
                 onClick={onClose}

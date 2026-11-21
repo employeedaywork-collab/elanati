@@ -116,6 +116,8 @@ function normalizeAdRow(row: any): Ad {
     ...row,
     extra_images: Array.isArray(row.extra_images) ? row.extra_images : [],
     priority_rank: typeof row.priority_rank === 'number' ? row.priority_rank : 0,
+    client_edits_count: typeof row.client_edits_count === 'number' ? row.client_edits_count : 0,
+    last_client_edited_at: row.last_client_edited_at || null,
   } as Ad;
 }
 
@@ -455,16 +457,26 @@ export async function checkAdAllowance(
 
 export async function fetchClientPortal(query: string): Promise<ClientPortalData> {
   const clean = query.trim();
-  if (!clean) return { subscription: null, ads: [] };
+  if (!clean) return { subscription: null, payments: [], ads: [] };
 
   if (supabase) {
     const { data, error } = await supabase.rpc('get_elanati_client_portal', {
       p_query: clean,
     });
     if (!error && data) {
-      const payload = data as { subscription: PackageRequest | null; ads: any[] };
+      const payload = data as {
+        subscription: PackageRequest | null;
+        payments?: PackageRequest[];
+        ads: any[];
+      };
+      const payments = Array.isArray(payload.payments)
+        ? payload.payments
+        : payload.subscription
+        ? [payload.subscription]
+        : [];
       return {
         subscription: payload.subscription || null,
+        payments,
         ads: Array.isArray(payload.ads) ? payload.ads.map(normalizeAdRow) : [],
       };
     }
@@ -496,9 +508,11 @@ export async function fetchClientPortal(query: string): Promise<ClientPortalData
             subscription.subscription_code.toUpperCase()) ||
         (phoneLookup && normalizeDigits(a.contact) === phoneLookup)
     )
+    .map(normalizeAdRow)
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  return { subscription, ads: clientAds };
+  const payments = [...matchingReqs].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return { subscription, payments, ads: clientAds };
 }
 
 // ============================================================================
@@ -762,6 +776,84 @@ export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad>
   return target;
 }
 
+export async function editAdByClient(input: {
+  adId: string;
+  ownerQuery: string;
+  title: string;
+  category: string;
+  city: string;
+  description: string;
+  image?: string;
+  image_url?: string;
+}): Promise<Ad> {
+  const cleanCat = input.category.trim().replace(/\s+/g, ' ');
+  if (cleanCat.length < 2) {
+    throw new Error('يرجى اختيار أو كتابة اسم تصنيف صحيح');
+  }
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc('edit_elanati_ad_by_client', {
+      p_ad_id: input.adId,
+      p_query: input.ownerQuery.trim(),
+      p_title: input.title.trim(),
+      p_category: cleanCat,
+      p_city: input.city.trim(),
+      p_description: input.description.trim(),
+      p_image: input.image || null,
+      p_image_url: input.image_url?.trim() || null,
+    });
+    if (error) throw new Error(error.message);
+    return normalizeAdRow(data);
+  }
+
+  try {
+    await addCategory(cleanCat);
+  } catch {
+    // ignore
+  }
+
+  const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  const queryDigits = normalizeDigits(input.ownerQuery);
+  const queryUpper = input.ownerQuery.trim().toUpperCase();
+  const nowIso = new Date().toISOString();
+
+  let updatedAd: Ad | undefined;
+  const next = all.map((raw) => {
+    const ad = normalizeAdRow(raw);
+    if (ad.id !== input.adId) return ad;
+
+    const owns =
+      (queryDigits && normalizeDigits(ad.contact) === queryDigits) ||
+      (ad.subscription_code && ad.subscription_code.toUpperCase() === queryUpper);
+    if (!owns) {
+      throw new Error('غير مصرح بتعديل هذا الإعلان بهذا الرقم أو الكود');
+    }
+    if ((ad.client_edits_count || 0) >= 1) {
+      throw new Error(
+        'تم استهلاك التعديل الوحيد المتاح للمعلن. لطلب أي تعديل إضافي يرجى التواصل مع إدارة المنصة.'
+      );
+    }
+
+    updatedAd = normalizeAdRow({
+      ...ad,
+      title: input.title.trim(),
+      category: cleanCat,
+      city: input.city.trim(),
+      description: input.description.trim(),
+      image: input.image || ad.image,
+      image_url: input.image_url?.trim() || null,
+      client_edits_count: (ad.client_edits_count || 0) + 1,
+      last_client_edited_at: nowIso,
+      updated_at: nowIso,
+    });
+    return updatedAd;
+  });
+
+  if (!updatedAd) throw new Error('الإعلان غير موجود');
+  writeLocal(STORAGE_KEYS.ads, next);
+  return updatedAd;
+}
+
 export async function deleteAdAdmin(id: string): Promise<void> {
   if (supabase) {
     const { error } = await supabase.from('elanati_ads').delete().eq('id', id);
@@ -886,7 +978,9 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
 
   // Local automatic intelligent reply inside the platform ($0 external cost)
   try {
-    const portal = input.phone ? await fetchClientPortal(input.phone) : { subscription: null, ads: [] };
+    const portal: ClientPortalData = input.phone
+      ? await fetchClientPortal(input.phone)
+      : { subscription: null, payments: [], ads: [] };
     const cfg = await fetchAutomationConfigAdmin();
     const matchedSub = portal.subscription;
     const matchedAd = portal.ads[0];
@@ -1253,6 +1347,78 @@ export async function activateSubscriptionAdmin(
             priority_rank: priorityRank,
             expires_at: adExpiresAt,
             status: ad.status === 'pending' ? 'approved' : ad.status,
+          }
+        : ad
+    )
+  );
+}
+
+export async function extendSubscriptionAdmin(
+  req: PackageRequest,
+  extraDays: number
+): Promise<void> {
+  const settings = await fetchSiteSettings();
+  const now = new Date();
+  const baseDate =
+    req.expires_at && new Date(req.expires_at).getTime() > now.getTime()
+      ? new Date(req.expires_at)
+      : now;
+  const newExpiresAt = addDaysIso(baseDate, extraDays);
+  const startsAt = req.starts_at || now.toISOString();
+  const isEnterprise = req.package_name === 'المؤسسي';
+  const subCode = req.subscription_code || generateSubscriptionCode();
+
+  await updatePackageRequestAdmin(req.id, {
+    subscription_code: subCode,
+    status: 'activated',
+    starts_at: startsAt,
+    expires_at: newExpiresAt,
+    account_manager_name: isEnterprise ? req.account_manager_name || 'مدير حسابات الشركات - إعلاناتي' : null,
+    account_manager_phone: isEnterprise ? req.account_manager_phone || settings.contact_phone : null,
+  });
+
+  const clientDigits = normalizeDigits(req.client_phone);
+  const adExpiresAt = isEnterprise ? null : newExpiresAt;
+  const priorityRank = isEnterprise ? 2 : 1;
+
+  if (supabase) {
+    const allAds = await fetchAllAdsAdmin();
+    const matchingAds = allAds.filter(
+      (a) =>
+        a.status !== 'rejected' &&
+        (normalizeDigits(a.contact) === clientDigits ||
+          (a.subscription_code && a.subscription_code === subCode))
+    );
+    await Promise.all(
+      matchingAds.map((ad) =>
+        updateAdAdmin(ad.id, {
+          package_name: req.package_name,
+          subscription_code: subCode,
+          featured: true,
+          priority_rank: priorityRank,
+          expires_at: adExpiresAt,
+          status: ad.status === 'archived' || ad.status === 'pending' ? 'approved' : ad.status,
+        })
+      )
+    );
+    return;
+  }
+
+  const allAds = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  writeLocal(
+    STORAGE_KEYS.ads,
+    allAds.map((ad) =>
+      ad.status !== 'rejected' &&
+      (normalizeDigits(ad.contact) === clientDigits ||
+        (ad.subscription_code && ad.subscription_code === subCode))
+        ? {
+            ...ad,
+            package_name: req.package_name,
+            subscription_code: subCode,
+            featured: true,
+            priority_rank: priorityRank,
+            expires_at: adExpiresAt,
+            status: ad.status === 'archived' || ad.status === 'pending' ? 'approved' : ad.status,
           }
         : ad
     )

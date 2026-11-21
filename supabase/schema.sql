@@ -22,13 +22,77 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.elanati_admins a
-    WHERE a.user_id = auth.uid()
-       OR ((auth.jwt() ->> 'email') IS NOT NULL
-           AND lower(a.email) = lower(auth.jwt() ->> 'email'))
+  SELECT COALESCE(auth.role(), '') = 'authenticated'
+    AND auth.uid() IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.elanati_admins a
+      WHERE a.user_id = auth.uid()
+         OR (
+           a.user_id IS NULL
+           AND (auth.jwt() ->> 'email') IS NOT NULL
+           AND lower(a.email) = lower(auth.jwt() ->> 'email')
+           AND EXISTS (
+             SELECT 1
+             FROM auth.users u
+             WHERE u.id = auth.uid()
+               AND lower(u.email) = lower(a.email)
+               AND u.email_confirmed_at IS NOT NULL
+           )
+         )
+    );
+$$;
+
+-- ربط معرف المستخدم الخاص بمدير المنصة عند أول دخول موثّق ومنع أي مستخدم آخر من انتحاله
+CREATE OR REPLACE FUNCTION public.claim_elanati_admin_session()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_email text := lower(trim(COALESCE(auth.jwt() ->> 'email', '')));
+  v_confirmed boolean := false;
+  v_admin public.elanati_admins%ROWTYPE;
+BEGIN
+  IF COALESCE(auth.role(), '') <> 'authenticated' OR v_uid IS NULL OR v_email = '' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT (u.email_confirmed_at IS NOT NULL AND lower(COALESCE(u.email, '')) = v_email)
+  INTO v_confirmed
+  FROM auth.users u
+  WHERE u.id = v_uid;
+
+  IF NOT COALESCE(v_confirmed, false) THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT *
+  INTO v_admin
+  FROM public.elanati_admins a
+  WHERE a.user_id = v_uid
+     OR (a.user_id IS NULL AND lower(a.email) = v_email)
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_admin.user_id IS NULL THEN
+    UPDATE public.elanati_admins
+    SET user_id = v_uid
+    WHERE id = v_admin.id
+      AND user_id IS NULL;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'email', v_admin.email,
+    'full_name', v_admin.full_name,
+    'role', v_admin.role
   );
+END;
 $$;
 
 -- 2) جدول الإعلانات (مع اسم المعلن ومدة الظهور التلقائية والصور الإضافية والبانر والأولوية)
@@ -1395,20 +1459,86 @@ VALUES
   ('محلات', 3, true)
 ON CONFLICT (name) DO NOTHING;
 
+-- دوال إدارية محصورة لمدير المنصة الموثق فقط (قراءة الإعلانات الكاملة وإحصائيات الشريط الجانبي)
+CREATE OR REPLACE FUNCTION public.admin_get_elanati_ads()
+RETURNS SETOF public.elanati_ads
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT public.is_elanati_admin() THEN
+    RAISE EXCEPTION 'غير مصرح بالوصول إلى بيانات مدير المنصة';
+  END IF;
+
+  RETURN QUERY
+  SELECT *
+  FROM public.elanati_ads
+  ORDER BY created_at DESC;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.admin_get_dashboard_counts()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_pending_ads integer := 0;
+  v_open_tickets integer := 0;
+  v_pending_packages integer := 0;
+BEGIN
+  IF NOT public.is_elanati_admin() THEN
+    RAISE EXCEPTION 'غير مصرح بالوصول إلى إحصائيات مدير المنصة';
+  END IF;
+
+  SELECT COUNT(*) INTO v_pending_ads
+  FROM public.elanati_ads
+  WHERE status = 'pending';
+
+  SELECT COUNT(*) INTO v_open_tickets
+  FROM public.elanati_contact_messages
+  WHERE status IN ('new', 'in_progress');
+
+  SELECT COUNT(*) INTO v_pending_packages
+  FROM public.elanati_package_requests
+  WHERE status = 'pending';
+
+  RETURN jsonb_build_object(
+    'pending_ads', v_pending_ads,
+    'open_tickets', v_open_tickets,
+    'pending_packages', v_pending_packages
+  );
+END;
+$$;
+
 -- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
-REVOKE ALL ON public.elanati_ads FROM anon;
+
+-- جدول مديري المنصة وجداول الأتمتة ورسائل العملاء: حظر تام على الزوار
+REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs FROM anon, authenticated;
+GRANT SELECT ON public.elanati_admins TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_automation_config, public.elanati_whatsapp_logs TO authenticated;
+
+-- جدول الإعلانات: استعلامات العامة والمستخدمين العاديين تقتصر على الأعمدة العامة الآمنة فقط
+REVOKE ALL ON public.elanati_ads FROM anon, authenticated;
 GRANT SELECT (
   id, title, category, description, contact, whatsapp, city, image,
   image_url, extra_images, banner_url, package_name, priority_rank,
   status, featured, views_count, starts_at, expires_at, created_at, updated_at
-) ON public.elanati_ads TO anon;
+) ON public.elanati_ads TO anon, authenticated;
+GRANT INSERT ON public.elanati_ads TO anon, authenticated;
+GRANT UPDATE, DELETE ON public.elanati_ads TO authenticated;
+
 GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_categories TO anon, authenticated;
-GRANT SELECT ON public.elanati_ads TO authenticated;
-GRANT INSERT ON public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_categories TO anon, authenticated;
-GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_categories TO authenticated;
+REVOKE ALL ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests FROM anon;
+GRANT INSERT ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_categories TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_categories TO authenticated;
 
 GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
@@ -1419,7 +1549,10 @@ GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text, text) TO
 GRANT EXECUTE ON FUNCTION public.get_elanati_public_templates() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.send_elanati_internal_auto_reply(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_expired_elanati_ads() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_elanati_admin_session() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_get_elanati_ads() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_get_dashboard_counts() TO authenticated;
 
 DO $$
 BEGIN

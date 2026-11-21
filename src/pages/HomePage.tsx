@@ -1,402 +1,205 @@
-import { useCallback, useEffect, useState } from 'react';
-import AddAdForm from '../components/AddAdForm';
-import AdDetailsModal from '../components/AdDetailsModal';
-import Advertisements from '../components/Advertisements';
-import ClientSubscriptionModal from '../components/ClientSubscriptionModal';
-import Contact from '../components/Contact';
-import Features from '../components/Features';
-import Footer from '../components/Footer';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeft, Crown, Layers, Megaphone, MessageSquare, Sparkles, Star } from 'lucide-react';
 import Hero from '../components/Hero';
-import Navbar from '../components/Navbar';
-import PackageRequestModal from '../components/PackageRequestModal';
-import Packages from '../components/Packages';
 import Stats from '../components/Stats';
-import SubscriptionsSection from '../components/SubscriptionsSection';
-import SupportWidget from '../components/SupportWidget';
 import Testimonials from '../components/Testimonials';
-import {
-  DEFAULT_CATEGORIES,
-  DEFAULT_SITE_SETTINGS,
-  INITIAL_ADS,
-  INITIAL_PACKAGES,
-  INITIAL_TESTIMONIALS,
-} from '../data/seedData';
-import { Sparkles, X } from 'lucide-react';
-import {
-  createAd,
-  fetchCategories,
-  fetchClientPortal,
-  fetchPackages,
-  fetchPublicAds,
-  fetchPublicAutomationTemplates,
-  fetchSiteSettings,
-  fetchTestimonials,
-  getAdminSession,
-  incrementAdViews,
-  renderWhatsAppTemplate,
-} from '../services/dataService';
-import { Ad, AdCategory, PackagePlan, SiteSettings, Testimonial } from '../types';
+import { usePublicContext } from '../components/PublicLayout';
+import { INITIAL_TESTIMONIALS } from '../data/seedData';
+import { sanitizeHttpUrl } from '../lib/supabase';
+import { fetchTestimonials } from '../services/dataService';
+import { Testimonial } from '../types';
 
 export default function HomePage() {
-  const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
-  const [ads, setAds] = useState<Ad[]>(INITIAL_ADS);
-  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
-  const [packages, setPackages] = useState<PackagePlan[]>(INITIAL_PACKAGES);
+  const { settings, ads, loadingAds, onAddAd, onViewAd } = usePublicContext();
   const [testimonials, setTestimonials] = useState<Testimonial[]>(INITIAL_TESTIMONIALS);
-  const [loadingAds, setLoadingAds] = useState(true);
-
-  const [selectedCategory, setSelectedCategory] = useState<AdCategory | 'الكل'>('الكل');
-  const [showAddAd, setShowAddAd] = useState(false);
-  const [viewingAd, setViewingAd] = useState<Ad | null>(null);
-  const [selectedPackage, setSelectedPackage] = useState<{
-    pkg: PackagePlan;
-    cycle: 'monthly' | 'annual';
-  } | null>(null);
-
-  const [portalOpen, setPortalOpen] = useState(false);
-  const [portalQuery, setPortalQuery] = useState('');
-
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [supportInitialTab, setSupportInitialTab] = useState<'new' | 'track' | 'direct'>('new');
-  const [supportPrefillSubject, setSupportPrefillSubject] = useState('');
-  const [supportPrefillAdId, setSupportPrefillAdId] = useState<string | null>(null);
-  const [activeTicketCode, setActiveTicketCode] = useState<string | null>(null);
-  const [clientReminder, setClientReminder] = useState<{
-    query: string;
-    message: string;
-    isPaid: boolean;
-  } | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  const loadData = useCallback(async () => {
-    try {
-      const [
-        loadedSettings,
-        loadedAds,
-        loadedCategories,
-        loadedPackages,
-        loadedTestimonials,
-        adminSess,
-      ] = await Promise.all([
-        fetchSiteSettings(),
-        fetchPublicAds(),
-        fetchCategories(),
-        fetchPackages(),
-        fetchTestimonials(false),
-        getAdminSession().catch(() => null),
-      ]);
-      setSettings(loadedSettings);
-      setAds(loadedAds);
-      setCategories(loadedCategories);
-      setPackages(loadedPackages);
-      setTestimonials(loadedTestimonials);
-      setIsAdmin(Boolean(adminSess));
-    } finally {
-      setLoadingAds(false);
-    }
-  }, []);
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
-
-  // Automatic zero-cost in-platform reminder check for returning advertisers
-  useEffect(() => {
-    let savedQuery = '';
-    try {
-      savedQuery =
-        localStorage.getItem('elanati_last_sub_code') ||
-        localStorage.getItem('elanati_last_client_phone') ||
-        '';
-      if (sessionStorage.getItem('elanati_reminder_dismissed') === '1') return;
-    } catch {
-      return;
-    }
-    if (!savedQuery.trim()) return;
-
-    void (async () => {
-      try {
-        const [portal, tpl] = await Promise.all([
-          fetchClientPortal(savedQuery),
-          fetchPublicAutomationTemplates(),
-        ]);
-        const now = Date.now();
-        const sub = portal.subscription;
-        if (sub && sub.status === 'activated' && sub.expires_at) {
-          const remMs = new Date(sub.expires_at).getTime() - now;
-          if (remMs > 0 && remMs <= tpl.paid_reminder_days_before * 24 * 60 * 60 * 1000) {
-            const remDays = Math.max(1, Math.ceil(remMs / (1000 * 60 * 60 * 24)));
-            setClientReminder({
-              query: savedQuery,
-              isPaid: true,
-              message: renderWhatsAppTemplate(tpl.paid_expiry_template, {
-                الاسم: sub.client_name || 'عميلنا العزيز',
-                الباقة: sub.package_name,
-                كود_الاشتراك: sub.subscription_code || '-',
-                الأيام_المتبقية: remDays,
-                تاريخ_الانتهاء: sub.expires_at.split('T')[0],
-              }),
-            });
-            return;
-          }
-        }
-        const freeAd = !sub ? portal.ads[0] : null;
-        if (freeAd && freeAd.status === 'approved' && freeAd.expires_at) {
-          const remMs = new Date(freeAd.expires_at).getTime() - now;
-          if (remMs > 0 && remMs <= tpl.free_reminder_hours_before * 60 * 60 * 1000) {
-            setClientReminder({
-              query: savedQuery,
-              isPaid: false,
-              message: renderWhatsAppTemplate(tpl.free_expiry_template, {
-                الاسم: freeAd.client_name || 'عميلنا العزيز',
-                عنوان_الإعلان: freeAd.title,
-                المشاهدات: freeAd.views_count || 0,
-                تاريخ_الانتهاء: freeAd.expires_at.split('T')[0],
-              }),
-            });
-          }
-        }
-      } catch {
-        // ignore
-      }
-    })();
+    void fetchTestimonials(false)
+      .then((items) => setTestimonials(items))
+      .catch(() => undefined);
   }, []);
 
-  const handleOpenAddAd = () => {
-    setShowAddAd(true);
-  };
+  const topAds = ads.slice(0, 3);
 
-  const handleOpenPortal = (initialQ = '') => {
-    setPortalQuery(initialQ);
-    setPortalOpen(true);
-  };
-
-  const scrollToPackages = () => {
-    const el = document.getElementById('packages');
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const handleCreateAd = async (input: {
-    client_name?: string;
-    title: string;
-    category: AdCategory;
-    description: string;
-    contact: string;
-    city: string;
-    image: string;
-    image_url?: string;
-    extra_images?: string[];
-    banner_url?: string;
-    subscription_code?: string;
-  }): Promise<{ requiresReview: boolean; ownerPin: string }> => {
-    const result = await createAd({
-      ...input,
-      requireApproval: settings.require_ad_approval,
-    });
-    const refreshedCats = await fetchCategories().catch(() => null);
-    if (refreshedCats) {
-      setCategories(refreshedCats);
-    }
-    if (!result.requiresReview) {
-      const refreshed = await fetchPublicAds();
-      setAds(refreshed);
-    }
-    return {
-      requiresReview: result.requiresReview,
-      ownerPin: result.ad.owner_pin || '',
-    };
-  };
-
-  const handleViewAd = (ad: Ad) => {
-    const updatedAd: Ad = { ...ad, views_count: (ad.views_count || 0) + 1 };
-    setViewingAd(updatedAd);
-    setAds((prev) => prev.map((item) => (item.id === ad.id ? updatedAd : item)));
-    void incrementAdViews(ad.id);
-  };
-
-  const handleSelectPackage = (pkg: PackagePlan, cycle: 'monthly' | 'annual') => {
-    if (pkg.monthly_price === 0 && pkg.annual_price === 0) {
-      setShowAddAd(true);
-      return;
-    }
-    setSelectedPackage({ pkg, cycle });
-  };
-
-  const handleInquireAdmin = (ad: Ad) => {
-    setViewingAd(null);
-    setSupportPrefillSubject(`استفسار حول إعلان: ${ad.title}`);
-    setSupportPrefillAdId(ad.id);
-    setSupportInitialTab('new');
-    setSupportOpen(true);
-  };
-
-  const handleRequestAdminEdit = (ad: Ad) => {
-    setSupportPrefillSubject(`طلب تعديل إعلان عبر الإدارة: ${ad.title}`);
-    setSupportPrefillAdId(ad.id);
-    setSupportInitialTab('new');
-    setSupportOpen(true);
-  };
-
-  const handleRequestSupportTicket = (subject: string) => {
-    setSupportPrefillSubject(subject);
-    setSupportPrefillAdId(null);
-    setSupportInitialTab('new');
-    setSupportOpen(true);
-  };
-
-  const handleTicketCreated = (ticketCode: string) => {
-    setActiveTicketCode(ticketCode);
-    setSupportInitialTab('track');
-    setSupportOpen(true);
-  };
+  const sectionCards = [
+    {
+      to: '/ads',
+      icon: Megaphone,
+      title: 'دليل الإعلانات المتكامل',
+      desc: 'تصفح عروض الموزعين والتجار وابحث حسب التصنيف والمحافظة.',
+      badge: `${ads.length} إعلان`,
+    },
+    {
+      to: '/packages',
+      icon: Sparkles,
+      title: 'الباقات والترقية',
+      desc: 'ابدأ مجاناً أو فعّل الباقة الاحترافية والمؤسسية لظهور في الصدارة.',
+      badge: 'تبدأ من 0 ج.م',
+    },
+    {
+      to: '/subscriptions',
+      icon: Layers,
+      title: 'الاشتراكات والدفعات',
+      desc: 'تابع عدّاد أيام اشتراكك، فواتير الجنيه المصري، وتعديل إعلانك.',
+      badge: 'متابعة فورية',
+    },
+    {
+      to: '/contact',
+      icon: MessageSquare,
+      title: 'تواصل مع الإدارة',
+      desc: 'افتح تذكرة دعم أو تابع الردود المباشرة من إدارة المنصة.',
+      badge: 'رد سريع',
+    },
+  ];
 
   return (
-    <div className="min-h-screen bg-white text-slate-900">
-      <Navbar
-        siteName={settings.site_name}
-        isAdmin={isAdmin}
-        onAddAd={handleOpenAddAd}
-        onOpenPortal={() => handleOpenPortal()}
-      />
+    <>
+      <Hero onAddAd={onAddAd} />
+      <Stats settings={settings} />
 
-      <main>
-        <Hero onAddAd={handleOpenAddAd} onSelectCategory={setSelectedCategory} />
-        <Stats settings={settings} />
-        <Features />
-        <Packages packages={packages} onSelectPackage={handleSelectPackage} />
-        <SubscriptionsSection
-          settings={settings}
-          categories={categories}
-          onAddAd={handleOpenAddAd}
-          onUpgrade={scrollToPackages}
-          onRequestAdminEdit={handleRequestAdminEdit}
-          onRequestSupportTicket={handleRequestSupportTicket}
-          onAdUpdated={loadData}
-        />
-        <Advertisements
-          ads={ads}
-          categories={categories}
-          loading={loadingAds}
-          selectedCategory={selectedCategory}
-          onCategoryChange={setSelectedCategory}
-          onViewAd={handleViewAd}
-          onAddAd={handleOpenAddAd}
-        />
-        <Testimonials testimonials={testimonials} />
-        <Contact settings={settings} onTicketCreated={handleTicketCreated} />
-      </main>
-
-      <Footer
-        settings={settings}
-        onAddAd={handleOpenAddAd}
-        onSelectCategory={setSelectedCategory}
-        onOpenPortal={() => handleOpenPortal()}
-      />
-
-      {showAddAd && (
-        <AddAdForm
-          settings={settings}
-          categories={categories}
-          onSubmit={handleCreateAd}
-          onClose={() => setShowAddAd(false)}
-          onUpgrade={scrollToPackages}
-          onOpenPortal={(q) => handleOpenPortal(q)}
-        />
-      )}
-
-      {viewingAd && (
-        <AdDetailsModal
-          ad={viewingAd}
-          onClose={() => setViewingAd(null)}
-          onInquireAdmin={handleInquireAdmin}
-        />
-      )}
-
-      {selectedPackage && (
-        <PackageRequestModal
-          pkg={selectedPackage.pkg}
-          cycle={selectedPackage.cycle}
-          settings={settings}
-          onClose={() => setSelectedPackage(null)}
-          onOpenPortal={(subCode) => handleOpenPortal(subCode)}
-        />
-      )}
-
-      {portalOpen && (
-        <ClientSubscriptionModal
-          settings={settings}
-          categories={categories}
-          initialQuery={portalQuery}
-          onClose={() => setPortalOpen(false)}
-          onAddAd={handleOpenAddAd}
-          onUpgrade={scrollToPackages}
-          onRequestAdminEdit={handleRequestAdminEdit}
-          onRequestSupportTicket={handleRequestSupportTicket}
-          onAdUpdated={loadData}
-        />
-      )}
-
-      {clientReminder && (
-        <div className="fixed bottom-4 right-4 z-40 max-w-sm bg-slate-900 text-white rounded-3xl p-4 shadow-2xl border border-amber-400/40 space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2 text-amber-400 font-extrabold text-xs">
-              <Sparkles className="w-4 h-4 shrink-0" />
-              <span>تنبيه تلقائي لاشتراكك على إعلاناتي</span>
-            </div>
-            <button
-              type="button"
-              aria-label="إغلاق التنبيه"
-              onClick={() => {
-                setClientReminder(null);
-                try {
-                  sessionStorage.setItem('elanati_reminder_dismissed', '1');
-                } catch {
-                  // ignore
-                }
-              }}
-              className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+      {/* Quick Sections Navigation Grid */}
+      <section className="py-16 bg-white border-b border-slate-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-10 max-w-2xl mx-auto">
+            <p className="text-blue-700 text-sm font-bold mb-2">أقسام المنصة المستقلة</p>
+            <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900">
+              انتقل مباشرة إلى القسم الذي تحتاجه
+            </h2>
           </div>
-          <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-line line-clamp-5">
-            {clientReminder.message}
-          </p>
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                setClientReminder(null);
-                scrollToPackages();
-              }}
-              className="flex-1 py-2 px-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold transition-colors"
-            >
-              {clientReminder.isPaid ? 'تجديد الاشتراك' : 'ترقية بـ 249 ج.م'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const q = clientReminder.query;
-                setClientReminder(null);
-                handleOpenPortal(q);
-              }}
-              className="py-2 px-3 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-colors"
-            >
-              العدّاد التنازلي
-            </button>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            {sectionCards.map((card) => {
+              const Icon = card.icon;
+              return (
+                <Link
+                  key={card.to}
+                  to={card.to}
+                  className="group p-6 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-blue-300 hover:shadow-md transition-all flex flex-col justify-between gap-4"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-200/70 text-slate-700 tabular-nums">
+                        {card.badge}
+                      </span>
+                    </div>
+                    <h3 className="text-base font-extrabold text-slate-900 group-hover:text-blue-700 transition-colors mb-1.5">
+                      {card.title}
+                    </h3>
+                    <p className="text-xs text-slate-600 leading-relaxed">{card.desc}</p>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-700">
+                    فتح الصفحة
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                  </span>
+                </Link>
+              );
+            })}
           </div>
         </div>
-      )}
+      </section>
 
-      <SupportWidget
-        settings={settings}
-        isOpen={supportOpen}
-        onToggle={setSupportOpen}
-        initialTab={supportInitialTab}
-        prefillSubject={supportPrefillSubject}
-        prefillAdId={supportPrefillAdId}
-        activeTicketCode={activeTicketCode}
-      />
-    </div>
+      {/* Lightweight Featured Ads Preview */}
+      <section className="py-16 bg-slate-50/70">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-10">
+            <div>
+              <p className="text-emerald-700 text-sm font-bold mb-1">مختارات المنصة</p>
+              <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900">
+                أبرز الإعلانات المميزة حالياً
+              </h2>
+            </div>
+            <Link
+              to="/ads"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold transition-colors self-start sm:self-auto"
+            >
+              تصفح جميع الإعلانات
+              <ArrowLeft className="w-4 h-4" />
+            </Link>
+          </div>
+
+          {loadingAds ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {[1, 2, 3].map((item) => (
+                <div
+                  key={item}
+                  className="h-56 rounded-2xl border border-slate-200 bg-white animate-pulse p-6"
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {topAds.map((ad) => {
+                const safeThumb = sanitizeHttpUrl(ad.image_url);
+                const isEnterprise = ad.package_name === 'المؤسسي' || ad.priority_rank === 2;
+                return (
+                  <article
+                    key={ad.id}
+                    className="rounded-2xl border border-slate-200 bg-white hover:border-blue-300 p-6 flex flex-col justify-between gap-4 transition-all"
+                  >
+                    <div>
+                      {safeThumb && (
+                        <div className="mb-4 h-36 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
+                          <img
+                            src={safeThumb}
+                            alt={ad.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="text-2xl" aria-hidden="true">
+                          {ad.image}
+                        </span>
+                        {isEnterprise ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800">
+                            <Crown className="w-3 h-3" />
+                            مؤسسي
+                          </span>
+                        ) : ad.featured ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">
+                            <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                            مميز
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="text-xs font-bold text-blue-700 mb-1">
+                        {ad.category} · {ad.city}
+                      </p>
+                      <h3 className="text-base font-extrabold text-slate-900 mb-1.5 line-clamp-1">
+                        {ad.title}
+                      </h3>
+                      <p className="text-xs text-slate-600 line-clamp-2">{ad.description}</p>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-700 tabular-nums">
+                        {ad.contact}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onViewAd(ad)}
+                        className="text-xs font-bold text-blue-700 hover:text-blue-900"
+                      >
+                        التفاصيل ←
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <Testimonials testimonials={testimonials} />
+    </>
   );
 }

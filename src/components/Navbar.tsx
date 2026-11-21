@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import { Clock, Menu, X } from 'lucide-react';
 
 interface NavbarProps {
@@ -9,6 +9,15 @@ interface NavbarProps {
   onOpenPortal: () => void;
 }
 
+const PUBLIC_TABS = [
+  { to: '/', label: 'الرئيسية', end: true },
+  { to: '/features', label: 'المميزات' },
+  { to: '/packages', label: 'الباقات' },
+  { to: '/subscriptions', label: 'الاشتراكات' },
+  { to: '/ads', label: 'الإعلانات' },
+  { to: '/contact', label: 'تواصل معنا' },
+];
+
 export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPortal }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -16,54 +25,34 @@ export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPorta
     <header className="fixed top-0 right-0 left-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16 gap-6">
-          <a
-            href="#home"
+          <Link
+            to="/"
             className="text-xl font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-blue-600 rounded"
           >
             {siteName}
-          </a>
+          </Link>
 
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-            <a
-              href="#home"
-              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              الرئيسية
-            </a>
-            <a
-              href="#features"
-              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              المميزات
-            </a>
-            <a
-              href="#packages"
-              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              الباقات
-            </a>
-            <a
-              href="#subscriptions"
-              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              الاشتراكات
-            </a>
-            <a
-              href="#ads"
-              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              الإعلانات
-            </a>
-            <a
-              href="#contact"
-              className="hover:text-blue-700 transition-colors whitespace-nowrap shrink-0"
-            >
-              تواصل معنا
-            </a>
+          <nav className="hidden md:flex items-center gap-1.5 text-sm font-medium text-slate-600">
+            {PUBLIC_TABS.map((tab) => (
+              <NavLink
+                key={tab.to}
+                to={tab.to}
+                end={tab.end}
+                className={({ isActive }) =>
+                  `px-3 py-2 rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                    isActive
+                      ? 'bg-blue-50 text-blue-700 font-bold'
+                      : 'text-slate-600 hover:text-blue-700 hover:bg-slate-50'
+                  }`
+                }
+              >
+                {tab.label}
+              </NavLink>
+            ))}
             {isAdmin && (
               <Link
                 to="/admin"
-                className="text-blue-700 font-bold hover:text-blue-800 transition-colors whitespace-nowrap shrink-0"
+                className="px-3 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
               >
                 لوحة المدير
               </Link>
@@ -100,49 +89,24 @@ export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPorta
 
         {isOpen && (
           <div className="md:hidden pb-5 pt-3 border-t border-slate-100">
-            <div className="flex flex-col gap-2">
-              <a
-                href="#home"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                الرئيسية
-              </a>
-              <a
-                href="#features"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                المميزات
-              </a>
-              <a
-                href="#packages"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                الباقات
-              </a>
-              <a
-                href="#subscriptions"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                الاشتراكات والدفعات
-              </a>
-              <a
-                href="#ads"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                الإعلانات
-              </a>
-              <a
-                href="#contact"
-                onClick={() => setIsOpen(false)}
-                className="text-slate-700 hover:text-blue-700 font-medium px-3 py-2.5 rounded-lg hover:bg-slate-50"
-              >
-                تواصل معنا
-              </a>
+            <div className="flex flex-col gap-1.5">
+              {PUBLIC_TABS.map((tab) => (
+                <NavLink
+                  key={tab.to}
+                  to={tab.to}
+                  end={tab.end}
+                  onClick={() => setIsOpen(false)}
+                  className={({ isActive }) =>
+                    `px-3 py-2.5 rounded-lg font-medium transition-colors ${
+                      isActive
+                        ? 'bg-blue-50 text-blue-700 font-bold'
+                        : 'text-slate-700 hover:text-blue-700 hover:bg-slate-50'
+                    }`
+                  }
+                >
+                  {tab.label}
+                </NavLink>
+              ))}
               {isAdmin && (
                 <Link
                   to="/admin"
@@ -158,7 +122,7 @@ export default function Navbar({ siteName, isAdmin = false, onAddAd, onOpenPorta
                   setIsOpen(false);
                   onOpenPortal();
                 }}
-                className="border border-slate-200 text-slate-800 px-6 py-3 rounded-xl font-bold text-center inline-flex items-center justify-center gap-2"
+                className="border border-slate-200 text-slate-800 px-6 py-3 rounded-xl font-bold text-center inline-flex items-center justify-center gap-2 mt-1"
               >
                 <Clock className="w-4 h-4 text-blue-700" />
                 متابعة اشتراكي وإعلاناتي

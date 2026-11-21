@@ -1,23 +1,22 @@
 import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { AdCategory, SiteSettings } from '../types';
 
 interface FooterProps {
   settings: SiteSettings;
   onAddAd: () => void;
-  onSelectCategory: (category: AdCategory | 'الكل') => void;
   onOpenPortal?: () => void;
 }
 
 type InfoModalType = 'faq' | 'privacy' | 'terms' | null;
 
-export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPortal }: FooterProps) {
+export default function Footer({ settings, onAddAd, onOpenPortal }: FooterProps) {
   const [infoModal, setInfoModal] = useState<InfoModalType>(null);
+  const navigate = useNavigate();
 
   const handleCategoryClick = (category: AdCategory) => {
-    onSelectCategory(category);
-    const el = document.getElementById('ads');
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
+    navigate(`/ads?category=${encodeURIComponent(category)}`);
   };
 
   return (
@@ -65,29 +64,29 @@ export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPort
               <h4 className="font-bold text-base mb-4">روابط سريعة</h4>
               <ul className="space-y-2.5 text-sm">
                 <li>
-                  <a href="#home" className="text-slate-400 hover:text-white transition-colors">
+                  <Link to="/" className="text-slate-400 hover:text-white transition-colors">
                     الرئيسية
-                  </a>
+                  </Link>
                 </li>
                 <li>
-                  <a href="#features" className="text-slate-400 hover:text-white transition-colors">
+                  <Link to="/features" className="text-slate-400 hover:text-white transition-colors">
                     المميزات
-                  </a>
+                  </Link>
                 </li>
                 <li>
-                  <a href="#packages" className="text-slate-400 hover:text-white transition-colors">
+                  <Link to="/packages" className="text-slate-400 hover:text-white transition-colors">
                     الباقات والأسعار
-                  </a>
+                  </Link>
                 </li>
                 <li>
-                  <a href="#subscriptions" className="text-slate-400 hover:text-white transition-colors">
+                  <Link to="/subscriptions" className="text-slate-400 hover:text-white transition-colors">
                     قسم الاشتراكات والدفعات
-                  </a>
+                  </Link>
                 </li>
                 <li>
-                  <a href="#ads" className="text-slate-400 hover:text-white transition-colors">
+                  <Link to="/ads" className="text-slate-400 hover:text-white transition-colors">
                     تصفح الإعلانات
-                  </a>
+                  </Link>
                 </li>
                 {onOpenPortal && (
                   <li>
@@ -140,9 +139,9 @@ export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPort
               <h4 className="font-bold text-base mb-4">الدعم والمساعدة</h4>
               <ul className="space-y-2.5 text-sm">
                 <li>
-                  <a href="#contact" className="text-slate-400 hover:text-white transition-colors">
+                  <Link to="/contact" className="text-slate-400 hover:text-white transition-colors">
                     تواصل معنا
-                  </a>
+                  </Link>
                 </li>
                 <li>
                   <button
@@ -218,7 +217,7 @@ export default function Footer({ settings, onAddAd, onSelectCategory, onOpenPort
                   </div>
                   <div>
                     <h4 className="font-bold text-slate-900 mb-1">كيف أميز إعلاني ليظهر في الصدارة؟</h4>
-                    <p>اختر الباقة الاحترافية أو المؤسسية من قسم الباقات وأرسل طلب التفعيل أو تواصل معنا مباشرة عبر الواتساب.</p>
+                    <p>اختر الباقة الاحترافية أو المؤسسية من صفحة الباقات وأرسل طلب التفعيل أو تواصل معنا مباشرة عبر الواتساب.</p>
                   </div>
                 </>
               )}

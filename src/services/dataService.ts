@@ -639,6 +639,11 @@ export async function fetchPublicAds(): Promise<Ad[]> {
 
 export async function fetchAllAdsAdmin(): Promise<Ad[]> {
   if (supabase) {
+    const rpcRes = await supabase.rpc('admin_get_elanati_ads');
+    if (!rpcRes.error && Array.isArray(rpcRes.data)) {
+      return rpcRes.data.map(normalizeAdRow);
+    }
+
     const { data, error } = await supabase
       .from('elanati_ads')
       .select('*')
@@ -647,6 +652,49 @@ export async function fetchAllAdsAdmin(): Promise<Ad[]> {
     return (data || []).map(normalizeAdRow);
   }
   return readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS).map(normalizeAdRow);
+}
+
+export async function fetchAdminBadgeCounts(): Promise<{
+  pendingAds: number;
+  openTickets: number;
+  pendingPackages: number;
+}> {
+  if (supabase) {
+    const rpcRes = await supabase.rpc('admin_get_dashboard_counts');
+    if (!rpcRes.error && rpcRes.data) {
+      return {
+        pendingAds: Number(rpcRes.data.pending_ads || 0),
+        openTickets: Number(rpcRes.data.open_tickets || 0),
+        pendingPackages: Number(rpcRes.data.pending_packages || 0),
+      };
+    }
+
+    const [adsRes, ticketsRes, pkgsRes] = await Promise.all([
+      supabase.from('elanati_ads').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      supabase
+        .from('elanati_contact_messages')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['new', 'in_progress']),
+      supabase
+        .from('elanati_package_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending'),
+    ]);
+    return {
+      pendingAds: adsRes.count || 0,
+      openTickets: ticketsRes.count || 0,
+      pendingPackages: pkgsRes.count || 0,
+    };
+  }
+
+  const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
+  const tickets = readLocal<ContactMessage[]>(STORAGE_KEYS.messages, []);
+  const pkgs = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
+  return {
+    pendingAds: ads.filter((a) => a.status === 'pending').length,
+    openTickets: tickets.filter((t) => t.status === 'new' || t.status === 'in_progress').length,
+    pendingPackages: pkgs.filter((r) => r.status === 'pending').length,
+  };
 }
 
 export interface CreateAdInput {
@@ -1707,13 +1755,25 @@ export async function getAdminSession(): Promise<AdminSession | null> {
   const user = data.session?.user;
   if (!user || !user.email) return null;
 
+  const claimRes = await supabase.rpc('claim_elanati_admin_session');
+  if (!claimRes.error) {
+    if (!claimRes.data) return null;
+    return {
+      email: claimRes.data.email,
+      fullName: claimRes.data.full_name || 'مدير المنصة',
+      isPreviewMode: false,
+    };
+  }
+
   const { data: adminRow } = await supabase
     .from('elanati_admins')
-    .select('email, full_name')
-    .ilike('email', user.email)
+    .select('email, full_name, user_id')
+    .or(`user_id.eq.${user.id},email.ilike.${user.email}`)
     .maybeSingle();
 
-  if (!adminRow) return null;
+  if (!adminRow || (adminRow.user_id && adminRow.user_id !== user.id)) {
+    return null;
+  }
 
   return {
     email: adminRow.email,
@@ -1760,13 +1820,26 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
     throw new Error('تعذر التحقق من حساب المدير');
   }
 
+  const claimRes = await supabase.rpc('claim_elanati_admin_session');
+  if (!claimRes.error) {
+    if (!claimRes.data) {
+      await supabase.auth.signOut();
+      throw new Error('هذا الحساب غير مسجل ضمن صلاحيات مدير المنصة');
+    }
+    return {
+      email: claimRes.data.email,
+      fullName: claimRes.data.full_name || 'مدير المنصة',
+      isPreviewMode: false,
+    };
+  }
+
   const { data: adminRow, error: adminErr } = await supabase
     .from('elanati_admins')
-    .select('email, full_name')
+    .select('email, full_name, user_id')
     .ilike('email', data.user.email)
     .maybeSingle();
 
-  if (adminErr || !adminRow) {
+  if (adminErr || !adminRow || (adminRow.user_id && adminRow.user_id !== data.user.id)) {
     await supabase.auth.signOut();
     throw new Error('هذا الحساب غير مسجل ضمن صلاحيات مديري المنصة');
   }

@@ -1,11 +1,13 @@
+import { Link, useNavigate } from 'react-router-dom';
 import { AdCategory } from '../types';
 
 interface HeroProps {
   onAddAd: () => void;
-  onSelectCategory: (category: AdCategory | 'الكل') => void;
 }
 
-export default function Hero({ onAddAd, onSelectCategory }: HeroProps) {
+export default function Hero({ onAddAd }: HeroProps) {
+  const navigate = useNavigate();
+
   const quickCategories: { icon: string; label: string; category: AdCategory | 'الكل' }[] = [
     { icon: '📦', label: 'إعلانات التوزيع', category: 'توزيع' },
     { icon: '💼', label: 'فرص التجارة والجملة', category: 'تجارة' },
@@ -14,15 +16,17 @@ export default function Hero({ onAddAd, onSelectCategory }: HeroProps) {
   ];
 
   const handleCategoryJump = (cat: AdCategory | 'الكل') => {
-    onSelectCategory(cat);
-    const el = document.getElementById('ads');
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
+    if (cat === 'الكل') {
+      navigate('/ads');
+    } else {
+      navigate(`/ads?category=${encodeURIComponent(cat)}`);
+    }
   };
 
   return (
     <section
       id="home"
-      className="relative min-h-[86vh] flex items-center justify-center overflow-hidden pt-24 pb-28 bg-slate-950"
+      className="relative min-h-[84vh] flex items-center justify-center overflow-hidden pt-24 pb-24 bg-slate-950"
     >
       <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950">
         <div className="absolute inset-0 opacity-20">
@@ -56,12 +60,12 @@ export default function Hero({ onAddAd, onSelectCategory }: HeroProps) {
           >
             أضف إعلانك الآن
           </button>
-          <a
-            href="#ads"
+          <Link
+            to="/ads"
             className="w-full sm:w-auto bg-white/10 hover:bg-white/15 border border-white/25 text-white px-8 py-4 rounded-xl font-bold text-base md:text-lg transition-colors whitespace-nowrap shrink-0"
           >
             تصفح الإعلانات المتاحة
-          </a>
+          </Link>
         </div>
 
         <div className="mt-14 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">

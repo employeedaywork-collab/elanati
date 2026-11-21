@@ -1,30 +1,38 @@
-import { Suspense, useCallback, useEffect, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useOutletContext } from 'react-router-dom';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import {
+  Bell,
+  BellRing,
   Bot,
   ExternalLink,
   Inbox,
+  KeyRound,
   Layers,
   LayoutDashboard,
   LogOut,
   Megaphone,
   Menu,
   RefreshCw,
+  Send,
   Settings,
   ShieldCheck,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import AdminAuth from '../../components/admin/AdminAuth';
 import { DEFAULT_SITE_SETTINGS } from '../../data/seedData';
-import { supabase } from '../../lib/supabase';
+import { formatWhatsAppLink, supabase } from '../../lib/supabase';
 import {
   archiveExpiredAdsAdmin,
   fetchAdminBadgeCounts,
+  fetchPendingPortalOtpsAdmin,
   fetchSiteSettings,
   getAdminSession,
+  markPortalOtpSentAdmin,
   signOutAdmin,
 } from '../../services/dataService';
-import { AdminSession, SiteSettings } from '../../types';
+import { AdminSession, PendingPortalOtp, SiteSettings } from '../../types';
 
 export interface AdminOutletContext {
   session: AdminSession;
@@ -56,33 +64,175 @@ function AdminTabLoader() {
   );
 }
 
+function playOtpAlertChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    [784, 1046.5].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.14);
+      gain.gain.setValueAtTime(0.001, now + idx * 0.14);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + idx * 0.14 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.25);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.14);
+      osc.stop(now + idx * 0.14 + 0.28);
+    });
+    setTimeout(() => {
+      void ctx.close().catch(() => {});
+    }, 900);
+  } catch {
+    // ignore autoplay/audio context errors
+  }
+}
+
 export default function AdminLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [session, setSession] = useState<AdminSession | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
-  const [badges, setBadges] = useState({ pendingAds: 0, openTickets: 0, pendingPackages: 0 });
+  const [badges, setBadges] = useState({
+    pendingAds: 0,
+    openTickets: 0,
+    pendingPackages: 0,
+    pendingOtps: 0,
+  });
+  const [pendingOtpItems, setPendingOtpItems] = useState<PendingPortalOtp[]>([]);
+  const [soundMuted, setSoundMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('elanati_admin_mute_otp') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [notifPerm, setNotifPerm] = useState<string>(() =>
+    typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+  );
+  const seenOtpIdsRef = useRef<Set<string>>(new Set());
+  const firstOtpLoadRef = useRef(true);
+
   const [refreshing, setRefreshing] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+
+  const notifyNewOtpRequests = useCallback(
+    (otps: PendingPortalOtp[]) => {
+      const currentIds = new Set(otps.map((o) => o.id));
+      const newOnes = otps.filter((o) => !seenOtpIdsRef.current.has(o.id));
+      seenOtpIdsRef.current = currentIds;
+
+      if (firstOtpLoadRef.current) {
+        firstOtpLoadRef.current = false;
+        return;
+      }
+      if (newOnes.length === 0) return;
+
+      if (!soundMuted) {
+        playOtpAlertChime();
+      }
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        try {
+          const latest = newOnes[0];
+          const n = new Notification('طلب رمز تحقق (OTP) جديد — إعلاناتي', {
+            body: `العميل (+${latest.phone_digits}) يطلب استلام رمز التحقق (${latest.manual_otp_code || ''}) عبر واتساب الآن.`,
+            tag: `elanati-otp-${latest.id}`,
+          });
+          n.onclick = () => {
+            window.focus();
+            navigate('/admin/automation');
+            n.close();
+          };
+        } catch {
+          // ignore browser notification restrictions
+        }
+      }
+    },
+    [navigate, soundMuted]
+  );
 
   const refreshShell = useCallback(async () => {
     if (!session) return;
     setRefreshing(true);
     try {
       await archiveExpiredAdsAdmin().catch(() => 0);
-      const [loadedSettings, counts] = await Promise.all([
+      const [loadedSettings, counts, otpItems] = await Promise.all([
         fetchSiteSettings(),
         fetchAdminBadgeCounts(),
+        fetchPendingPortalOtpsAdmin(),
       ]);
       setSettings(loadedSettings);
-      setBadges(counts);
+      setBadges({
+        ...counts,
+        pendingOtps: Math.max(counts.pendingOtps, otpItems.length),
+      });
+      setPendingOtpItems(otpItems);
+      notifyNewOtpRequests(otpItems);
       setRefreshTick((t) => t + 1);
     } finally {
       setRefreshing(false);
     }
-  }, [session]);
+  }, [notifyNewOtpRequests, session]);
+
+  useEffect(() => {
+    const defaultTitle = `${settings.site_name || 'إعلاناتي'} — لوحة تحكم المدير`;
+    if (badges.pendingOtps > 0) {
+      document.title = `🔔 (${badges.pendingOtps}) طلب كود OTP — ${settings.site_name || 'إعلاناتي'}`;
+    } else {
+      document.title = defaultTitle;
+    }
+    return () => {
+      document.title = defaultTitle;
+    };
+  }, [badges.pendingOtps, settings.site_name]);
+
+  const toggleSoundMute = () => {
+    setSoundMuted((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('elanati_admin_mute_otp', next ? '1' : '0');
+      } catch {
+        // ignore storage errors
+      }
+      if (!next) {
+        playOtpAlertChime();
+      }
+      return next;
+    });
+  };
+
+  const handleEnableBrowserNotifs = async () => {
+    if (typeof Notification === 'undefined') return;
+    try {
+      const res = await Notification.requestPermission();
+      setNotifPerm(res);
+      if (res === 'granted') {
+        playOtpAlertChime();
+        new Notification('تم تفعيل تنبيهات إعلاناتي بنجاح', {
+          body: 'ستصلك إشعارات فورية فور طلب أي عميل لرمز التحقق (OTP).',
+        });
+      }
+    } catch {
+      // ignore permission prompt error
+    }
+  };
+
+  const handleQuickMarkOtpSent = async (otpId: string) => {
+    try {
+      await markPortalOtpSentAdmin(otpId);
+      setPendingOtpItems((prev) => prev.filter((item) => item.id !== otpId));
+      setBadges((prev) => ({ ...prev, pendingOtps: Math.max(0, prev.pendingOtps - 1) }));
+      setRefreshTick((t) => t + 1);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -117,6 +267,20 @@ export default function AdminLayout() {
     if (!session) return;
     void refreshShell();
 
+    // Polling fallback every 15s so OTP alerts trigger reliably even without WebSocket/Realtime
+    const pollTimer = setInterval(() => {
+      void Promise.all([fetchAdminBadgeCounts(), fetchPendingPortalOtpsAdmin()]).then(
+        ([counts, otpItems]) => {
+          setBadges({
+            ...counts,
+            pendingOtps: Math.max(counts.pendingOtps, otpItems.length),
+          });
+          setPendingOtpItems(otpItems);
+          notifyNewOtpRequests(otpItems);
+        }
+      );
+    }, 15000);
+
     const client = supabase;
     if (client) {
       const channel = client
@@ -138,13 +302,25 @@ export default function AdminLayout() {
             void refreshShell();
           }
         )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_portal_otps' },
+          () => {
+            void refreshShell();
+          }
+        )
         .subscribe();
 
       return () => {
+        clearInterval(pollTimer);
         void client.removeChannel(channel);
       };
     }
-  }, [session, refreshShell]);
+
+    return () => {
+      clearInterval(pollTimer);
+    };
+  }, [notifyNewOtpRequests, refreshShell, session]);
 
   const handleSignOut = async () => {
     await signOutAdmin();
@@ -181,7 +357,7 @@ export default function AdminLayout() {
       icon: Layers,
       badge: badges.pendingPackages,
     },
-    { to: '/admin/automation', label: 'الأتمتة والواتساب', icon: Bot },
+    { to: '/admin/automation', label: 'الأتمتة والواتساب', icon: Bot, badge: badges.pendingOtps },
     { to: '/admin/settings', label: 'المحتوى والإعدادات', icon: Settings },
   ];
 
@@ -344,9 +520,12 @@ export default function AdminLayout() {
               type="button"
               onClick={() => setMobileNavOpen(true)}
               aria-label="فتح القائمة"
-              className="lg:hidden p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50"
+              className="relative lg:hidden p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50"
             >
               <Menu className="w-5 h-5" />
+              {badges.pendingOtps > 0 && (
+                <span className="absolute -top-1 -left-1 w-3 h-3 rounded-full bg-emerald-600 ring-2 ring-white animate-pulse" />
+              )}
             </button>
             <div>
               <h1 className="text-lg font-extrabold text-slate-900">{pageTitle}</h1>
@@ -356,7 +535,37 @@ export default function AdminLayout() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            {badges.pendingOtps > 0 && (
+              <Link
+                to="/admin/automation"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold transition-colors animate-pulse"
+              >
+                <BellRing className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">طلبات OTP بانتظارك:</span>
+                <span className="tabular-nums">{badges.pendingOtps}</span>
+              </Link>
+            )}
+            {notifPerm === 'default' && (
+              <button
+                type="button"
+                onClick={() => void handleEnableBrowserNotifs()}
+                title="تفعيل إشعارات المتصفح لطلبات الأكواد"
+                className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition-colors"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                تفعيل الإشعارات
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={toggleSoundMute}
+              title={soundMuted ? 'تشغيل صوت تنبيه طلبات OTP' : 'كتم صوت تنبيه طلبات OTP'}
+              aria-label={soundMuted ? 'تشغيل صوت التنبيه' : 'كتم صوت التنبيه'}
+              className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 transition-colors"
+            >
+              {soundMuted ? <VolumeX className="w-4 h-4 text-slate-400" /> : <Volume2 className="w-4 h-4 text-emerald-700" />}
+            </button>
             <button
               type="button"
               onClick={() => void refreshShell()}
@@ -364,7 +573,7 @@ export default function AdminLayout() {
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-bold text-slate-700 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              تحديث
+              <span className="hidden sm:inline">تحديث</span>
             </button>
             <Link
               to="/"
@@ -377,6 +586,53 @@ export default function AdminLayout() {
         </header>
 
         <main className="p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-5">
+          {pendingOtpItems.length > 0 && location.pathname !== '/admin/automation' && (
+            <div className="bg-emerald-50 border-2 border-emerald-400 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-extrabold text-emerald-950">
+                    تنبيه: يوجد {pendingOtpItems.length} عميل يطلب استلام رمز التحقق (OTP) الآن!
+                  </p>
+                  <p className="text-xs text-emerald-900">
+                    أحدث طلب للرقم{' '}
+                    <span dir="ltr" className="font-mono font-bold">
+                      +{pendingOtpItems[0].phone_digits}
+                    </span>{' '}
+                    — الكود:{' '}
+                    <span className="font-mono font-extrabold bg-white px-2 py-0.5 rounded border border-emerald-300 tracking-widest">
+                      {pendingOtpItems[0].manual_otp_code}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <a
+                  href={formatWhatsAppLink(
+                    pendingOtpItems[0].phone_digits,
+                    `مرحباً بك في منصة إعلاناتي 👋\nرمز التحقق (OTP) لعرض اشتراكاتك ومدفوعاتك هو: *${pendingOtpItems[0].manual_otp_code || ''}*\nصالح لمدة 10 دقائق، ولا تشاركه مع أي شخص.`
+                  )}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => void handleQuickMarkOtpSent(pendingOtpItems[0].id)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  إرسال الكود لواتساب العميل الآن
+                </a>
+                <Link
+                  to="/admin/automation"
+                  className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-900 text-xs font-bold transition-colors"
+                >
+                  فتح قائمة الأكواد
+                </Link>
+              </div>
+            </div>
+          )}
+
           <Suspense fallback={<AdminTabLoader />}>
             <Outlet
               context={{

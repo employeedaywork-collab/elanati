@@ -26,11 +26,14 @@ import { formatWhatsAppLink, supabase } from '../../lib/supabase';
 import {
   archiveExpiredAdsAdmin,
   fetchAdminBadgeCounts,
+  fetchAdminPushConfig,
   fetchPendingPortalOtpsAdmin,
   fetchSiteSettings,
   getAdminSession,
   markPortalOtpSentAdmin,
+  sendTestAdminWebPush,
   signOutAdmin,
+  subscribeAdminWebPush,
 } from '../../services/dataService';
 import { AdminSession, PendingPortalOtp, SiteSettings } from '../../types';
 
@@ -91,6 +94,18 @@ function playOtpAlertChime() {
   }
 }
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const buffer = new ArrayBuffer(rawData.length);
+  const outputArray = new Uint8Array(buffer);
+  for (let i = 0; i < rawData.length; i += 1) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export default function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -116,11 +131,84 @@ export default function AdminLayout() {
   const [notifPerm, setNotifPerm] = useState<string>(() =>
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   );
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(
+    null
+  );
+  const [hidePushBanner, setHidePushBanner] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('elanati_hide_push_banner') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const swRegRef = useRef<ServiceWorkerRegistration | null>(null);
   const seenOtpIdsRef = useRef<Set<string>>(new Set());
   const firstOtpLoadRef = useRef(true);
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      void navigator.serviceWorker
+        .register('/sw.js')
+        .then(async (reg) => {
+          swRegRef.current = reg;
+          if ('pushManager' in reg) {
+            const sub = await reg.pushManager.getSubscription();
+            if (sub && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              setPushSubscribed(true);
+              if (session && !session.isPreviewMode) {
+                await subscribeAdminWebPush(sub.toJSON()).catch(() => {});
+              }
+            }
+          }
+        })
+        .catch(() => {
+          // ignore service worker registration errors in unsupported contexts
+        });
+    }
+  }, [session]);
+
+  const showMobileOrDesktopNotif = useCallback(
+    async (title: string, body: string, tag?: string) => {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+      try {
+        const reg =
+          swRegRef.current ||
+          (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+            ? await navigator.serviceWorker.getRegistration('/sw.js')
+            : undefined);
+
+        if (reg && typeof reg.showNotification === 'function') {
+          await reg.showNotification(title, {
+            body,
+            tag,
+            renotify: true,
+            vibrate: [220, 120, 220],
+            data: { url: '/admin/automation' },
+          } as NotificationOptions);
+          return;
+        }
+      } catch {
+        // fall through to window Notification
+      }
+
+      try {
+        const n = new Notification(title, { body, tag });
+        n.onclick = () => {
+          window.focus();
+          navigate('/admin/automation');
+          n.close();
+        };
+      } catch {
+        // Android Chrome forbids raw new Notification without SW; handled above
+      }
+    },
+    [navigate]
+  );
 
   const notifyNewOtpRequests = useCallback(
     (otps: PendingPortalOtp[]) => {
@@ -137,24 +225,22 @@ export default function AdminLayout() {
       if (!soundMuted) {
         playOtpAlertChime();
       }
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
         try {
-          const latest = newOnes[0];
-          const n = new Notification('طلب رمز تحقق (OTP) جديد — إعلاناتي', {
-            body: `العميل (+${latest.phone_digits}) يطلب استلام رمز التحقق (${latest.manual_otp_code || ''}) عبر واتساب الآن.`,
-            tag: `elanati-otp-${latest.id}`,
-          });
-          n.onclick = () => {
-            window.focus();
-            navigate('/admin/automation');
-            n.close();
-          };
+          navigator.vibrate([220, 120, 220]);
         } catch {
-          // ignore browser notification restrictions
+          // ignore vibration restrictions
         }
       }
+
+      const latest = newOnes[0];
+      void showMobileOrDesktopNotif(
+        'طلب رمز تحقق (OTP) جديد — إعلاناتي',
+        `العميل (+${latest.phone_digits}) يطلب استلام رمز التحقق (${latest.manual_otp_code || ''}) عبر واتساب الآن.`,
+        `elanati-otp-${latest.id}`
+      );
     },
-    [navigate, soundMuted]
+    [showMobileOrDesktopNotif, soundMuted]
   );
 
   const refreshShell = useCallback(async () => {
@@ -208,18 +294,98 @@ export default function AdminLayout() {
   };
 
   const handleEnableBrowserNotifs = async () => {
-    if (typeof Notification === 'undefined') return;
+    setPushFeedback(null);
+    if (typeof Notification === 'undefined') {
+      setPushFeedback({
+        type: 'err',
+        text: 'على آيفون: اضغط زر المشاركة ثم «إضافة إلى الشاشة الرئيسية» أولاً لتفعيل الإشعارات.',
+      });
+      return;
+    }
+
+    setPushBusy(true);
     try {
       const res = await Notification.requestPermission();
       setNotifPerm(res);
-      if (res === 'granted') {
-        playOtpAlertChime();
-        new Notification('تم تفعيل تنبيهات إعلاناتي بنجاح', {
-          body: 'ستصلك إشعارات فورية فور طلب أي عميل لرمز التحقق (OTP).',
+      if (res !== 'granted') {
+        setPushFeedback({
+          type: 'err',
+          text: 'تم رفض إذن الإشعارات من المتصفح. يمكنك السماح به من إعدادات الموقع.',
         });
+        return;
       }
-    } catch {
-      // ignore permission prompt error
+
+      playOtpAlertChime();
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(150);
+      }
+
+      // Register real Web Push subscription when running on live Supabase + Service Worker
+      if (
+        session &&
+        !session.isPreviewMode &&
+        typeof navigator !== 'undefined' &&
+        'serviceWorker' in navigator
+      ) {
+        const reg =
+          swRegRef.current || (await navigator.serviceWorker.register('/sw.js'));
+        swRegRef.current = reg;
+        const readyReg = await navigator.serviceWorker.ready;
+        if ('pushManager' in readyReg) {
+          const cfg = await fetchAdminPushConfig();
+          if (cfg?.publicKey) {
+            let sub = await readyReg.pushManager.getSubscription();
+            if (!sub) {
+              sub = await readyReg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(cfg.publicKey),
+              });
+            }
+            await subscribeAdminWebPush(sub.toJSON());
+            setPushSubscribed(true);
+            await sendTestAdminWebPush().catch(() => 0);
+            setPushFeedback({
+              type: 'ok',
+              text: 'تم تفعيل إشعارات Web Push على هذا الجهاز! سيصلك إشعار فوري حتى عند إغلاق المتصفح.',
+            });
+            return;
+          }
+        }
+      }
+
+      await showMobileOrDesktopNotif(
+        'تم تفعيل تنبيهات الموبايل بنجاح',
+        'ستصلك إشعارات فورية فور طلب أي عميل لرمز التحقق (OTP).',
+        'elanati-notif-enabled'
+      );
+      setPushSubscribed(true);
+      setPushFeedback({ type: 'ok', text: 'تم تفعيل الإشعارات بنجاح.' });
+    } catch (err: any) {
+      setPushFeedback({
+        type: 'err',
+        text: err?.message || 'تعذر إكمال ربط Web Push على هذا المتصفح',
+      });
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleTestWebPush = async () => {
+    setPushBusy(true);
+    setPushFeedback(null);
+    try {
+      const sent = await sendTestAdminWebPush();
+      setPushFeedback({
+        type: 'ok',
+        text: `تم إرسال إشعار تجريبي إلى ${sent} جهاز مسجل بنجاح.`,
+      });
+    } catch (err: any) {
+      setPushFeedback({
+        type: 'err',
+        text: err?.message || 'تعذر إرسال الإشعار التجريبي',
+      });
+    } finally {
+      setPushBusy(false);
     }
   };
 
@@ -546,15 +712,29 @@ export default function AdminLayout() {
                 <span className="tabular-nums">{badges.pendingOtps}</span>
               </Link>
             )}
-            {notifPerm === 'default' && (
+            {!pushSubscribed ? (
               <button
                 type="button"
+                disabled={pushBusy}
                 onClick={() => void handleEnableBrowserNotifs()}
-                title="تفعيل إشعارات المتصفح لطلبات الأكواد"
-                className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition-colors"
+                title="تفعيل إشعارات الموبايل (Web Push) حتى عند إغلاق المتصفح"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60 text-emerald-800 text-xs font-bold transition-colors"
               >
-                <Bell className="w-3.5 h-3.5" />
-                تفعيل الإشعارات
+                <Bell className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">
+                  {pushBusy ? 'جاري التفعيل...' : 'تفعيل إشعارات الموبايل'}
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={pushBusy}
+                onClick={() => void handleTestWebPush()}
+                title="إرسال إشعار تجريبي لموبايلك الآن"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:opacity-60 text-blue-800 text-xs font-bold transition-colors"
+              >
+                <BellRing className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">اختبار الإشعار</span>
               </button>
             )}
             <button
@@ -586,6 +766,64 @@ export default function AdminLayout() {
         </header>
 
         <main className="p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-5">
+          {pushFeedback && (
+            <div
+              className={`p-3.5 rounded-2xl text-xs font-bold flex items-center justify-between gap-3 ${
+                pushFeedback.type === 'ok'
+                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                  : 'bg-red-50 border border-red-200 text-red-700'
+              }`}
+            >
+              <span>{pushFeedback.text}</span>
+              <button
+                type="button"
+                onClick={() => setPushFeedback(null)}
+                className="underline shrink-0"
+              >
+                إغلاق
+              </button>
+            </div>
+          )}
+
+          {!pushSubscribed && !hidePushBanner && notifPerm !== 'denied' && (
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5 text-xs text-blue-950">
+                <Bell className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-extrabold">
+                    فعّل إشعارات Web Push على موبايلك لاستلام تنبيهات طلبات OTP حتى عند إغلاق المتصفح
+                  </p>
+                  <p className="text-blue-800 mt-0.5">
+                    على آيفون: أضف الصفحة للشاشة الرئيسية أولاً عبر زر المشاركة ثم افتحها واضغط التفعيل.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={pushBusy}
+                  onClick={() => void handleEnableBrowserNotifs()}
+                  className="px-3.5 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white text-xs font-bold"
+                >
+                  {pushBusy ? 'جاري التفعيل...' : 'تفعيل على هذا الجهاز'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHidePushBanner(true);
+                    try {
+                      localStorage.setItem('elanati_hide_push_banner', '1');
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className="px-2.5 py-2 rounded-xl text-blue-700 hover:bg-blue-100 text-xs font-bold"
+                >
+                  لاحقاً
+                </button>
+              </div>
+            </div>
+          )}
           {pendingOtpItems.length > 0 && location.pathname !== '/admin/automation' && (
             <div className="bg-emerald-50 border-2 border-emerald-400 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
               <div className="flex items-start gap-3">

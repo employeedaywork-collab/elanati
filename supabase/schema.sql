@@ -1456,6 +1456,7 @@ DECLARE
   v_pending_ads integer := 0;
   v_open_tickets integer := 0;
   v_pending_packages integer := 0;
+  v_pending_otps integer := 0;
 BEGIN
   IF NOT public.is_elanati_admin() THEN
     RAISE EXCEPTION 'غير مصرح بالوصول إلى إحصائيات مدير المنصة';
@@ -1473,10 +1474,18 @@ BEGIN
   FROM public.elanati_package_requests
   WHERE status = 'pending';
 
+  SELECT COUNT(*) INTO v_pending_otps
+  FROM public.elanati_portal_otps
+  WHERE delivery_status = 'pending_manual'
+    AND verified_at IS NULL
+    AND expires_at > now()
+    AND manual_otp_code IS NOT NULL;
+
   RETURN jsonb_build_object(
     'pending_ads', v_pending_ads,
     'open_tickets', v_open_tickets,
-    'pending_packages', v_pending_packages
+    'pending_packages', v_pending_packages,
+    'pending_otps', v_pending_otps
   );
 END;
 $$;
@@ -1522,14 +1531,49 @@ CREATE POLICY "Admins can manage portal otps"
   WITH CHECK (public.is_elanati_admin());
 
 -- ============================================================================
+-- 12) جداول إشعارات الموبايل المباشرة (Web Push VAPID Keys & Subscriptions)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.elanati_push_vapid_keys (
+  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  public_key text NOT NULL,
+  private_key text NOT NULL,
+  subject text NOT NULL DEFAULT 'mailto:admin@elanati.app',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.elanati_admin_push_subscriptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_email text NOT NULL,
+  endpoint text UNIQUE NOT NULL,
+  p256dh text NOT NULL,
+  auth text NOT NULL,
+  user_agent text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_used_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_elanati_admin_push_subs_email
+  ON public.elanati_admin_push_subscriptions (admin_email, created_at DESC);
+
+ALTER TABLE public.elanati_push_vapid_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.elanati_admin_push_subscriptions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can manage push subscriptions" ON public.elanati_admin_push_subscriptions;
+CREATE POLICY "Admins can manage push subscriptions"
+  ON public.elanati_admin_push_subscriptions FOR ALL
+  TO authenticated
+  USING (public.is_elanati_admin())
+  WITH CHECK (public.is_elanati_admin());
+
+-- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 
--- جدول مديري المنصة وجداول الأتمتة ورموز OTP وجلسات البوابة: حظر تام على الزوار
-REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_portal_sessions FROM anon, authenticated;
+-- جدول مديري المنصة وجداول الأتمتة ورموز OTP وجلسات البوابة ومفاتيح Web Push: حظر تام على الزوار
+REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_portal_sessions, public.elanati_push_vapid_keys, public.elanati_admin_push_subscriptions FROM anon, authenticated;
 GRANT SELECT ON public.elanati_admins TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_admin_push_subscriptions TO authenticated;
 
 -- جدول الإعلانات: استعلامات العامة والمستخدمين العاديين تقتصر على الأعمدة العامة الآمنة فقط
 REVOKE ALL ON public.elanati_ads FROM anon, authenticated;
@@ -1586,6 +1630,10 @@ BEGIN
     END;
     BEGIN
       ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_categories;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_portal_otps;
     EXCEPTION WHEN duplicate_object THEN NULL;
     END;
   END IF;

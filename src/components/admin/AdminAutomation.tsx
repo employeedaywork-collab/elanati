@@ -19,7 +19,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { DEFAULT_AUTOMATION_CONFIG } from '../../data/seedData';
-import { formatWhatsAppLink } from '../../lib/supabase';
+import { formatWhatsAppLink, supabase } from '../../lib/supabase';
 import {
   archiveExpiredAdsAdmin,
   fetchAutomationConfigAdmin,
@@ -86,6 +86,30 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     void loadAutomation();
   }, [loadAutomation]);
 
+  useEffect(() => {
+    const poll = setInterval(() => {
+      void fetchPendingPortalOtpsAdmin().then(setPendingOtps);
+    }, 15000);
+
+    const client = supabase;
+    if (!client) {
+      return () => {
+        clearInterval(poll);
+      };
+    }
+
+    const channel = client
+      .channel('elanati-admin-otps-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_portal_otps' }, () => {
+        void fetchPendingPortalOtpsAdmin().then(setPendingOtps);
+      })
+      .subscribe();
+    return () => {
+      clearInterval(poll);
+      void client.removeChannel(channel);
+    };
+  }, []);
+
   const handleSaveConfig = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setSaving(true);
@@ -149,6 +173,7 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     try {
       await markPortalOtpSentAdmin(otp.id);
       setPendingOtps((prev) => prev.filter((item) => item.id !== otp.id));
+      void onRefresh();
       setFeedback({
         type: 'ok',
         text: viaWhatsApp
@@ -237,6 +262,125 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
           </button>
         </div>
       )}
+
+      {/* Pending Client Portal OTPs (Zero-Cost 1-Click WhatsApp OTP Queue — Top Priority) */}
+      <div
+        className={`rounded-2xl border p-6 space-y-4 ${
+          pendingOtps.length > 0
+            ? 'bg-emerald-50/40 border-emerald-400 shadow-sm'
+            : 'bg-white border-slate-200'
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                pendingOtps.length > 0
+                  ? 'bg-emerald-600 text-white animate-pulse'
+                  : 'bg-emerald-50 text-emerald-700'
+              }`}
+            >
+              <KeyRound className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-extrabold text-slate-900">
+                  رموز التحقق (OTP) لواتساب العملاء ({pendingOtps.length})
+                </h3>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
+                  إرسال يدوي مجاني بضغطة زر
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                عند طلب أي عميل عرض اشتراكاته، يصلك تنبيه هنا فوراً لإرسال الرمز لرقمه عبر واتساب مباشرة (صالح لمدة 10 دقائق).
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            disabled={refreshingOtps}
+            onClick={() => void handleRefreshOtps()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshingOtps ? 'animate-spin' : ''}`} />
+            تحديث الطلبات
+          </button>
+        </div>
+
+        {pendingOtps.length === 0 ? (
+          <div className="p-5 rounded-2xl bg-slate-50 border border-slate-100 text-center text-xs font-semibold text-slate-500">
+            لا توجد طلبات رموز تحقق (OTP) بانتظار الإرسال حالياً.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pendingOtps.map((otp) => {
+              const code = otp.manual_otp_code || '';
+              const waMessage = `مرحباً بك في منصة إعلاناتي 👋\nرمز التحقق (OTP) لعرض اشتراكاتك ومدفوعاتك هو: *${code}*\nصالح لمدة 10 دقائق، ولا تشاركه مع أي شخص.`;
+              const waUrl = formatWhatsAppLink(otp.phone_digits, waMessage);
+
+              return (
+                <div
+                  key={otp.id}
+                  className="p-4 rounded-2xl border border-emerald-300 bg-white flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <span className="font-extrabold text-sm text-slate-900 tabular-nums" dir="ltr">
+                        +{otp.phone_digits}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 font-mono font-extrabold text-sm tracking-widest">
+                        {code}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyOtp(otp)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-bold transition-colors"
+                      >
+                        {copiedOtpId === otp.id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            تم النسخ
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            نسخ الكود
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-500 tabular-nums">
+                      صالح لمدة متبقية: <strong className="text-slate-700">{formatOtpRemaining(otp.expires_at)}</strong> · طُلب في{' '}
+                      {new Date(otp.created_at).toLocaleTimeString('ar-EG')}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <a
+                      href={waUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => void handleMarkOtpSent(otp, true)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      إرسال الكود لواتساب العميل مجاناً
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => void handleMarkOtpSent(otp, false)}
+                      className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors"
+                    >
+                      تم الإرسال
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Free In-Platform Automation Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -480,113 +624,6 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
         </div>
       </form>
 
-      {/* Pending Client Portal OTPs (Zero-Cost 1-Click WhatsApp OTP Queue) */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-              <KeyRound className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-extrabold text-slate-900">
-                  رموز التحقق (OTP) لواتساب العملاء ({pendingOtps.length})
-                </h3>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
-                  إرسال مجاني بضغطة زر
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                عند طلب العميل عرض اشتراكاته بدون بوابة واتساب مدفوعة، يظهر الرمز هنا لإرساله لرقمه عبر واتساب مباشرة (صالح لمدة 10 دقائق).
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            disabled={refreshingOtps}
-            onClick={() => void handleRefreshOtps()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshingOtps ? 'animate-spin' : ''}`} />
-            تحديث الطلبات
-          </button>
-        </div>
-
-        {pendingOtps.length === 0 ? (
-          <div className="p-6 rounded-2xl bg-slate-50 border border-slate-100 text-center text-xs font-semibold text-slate-500">
-            لا توجد طلبات رموز تحقق (OTP) بانتظار الإرسال اليدوي حالياً.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {pendingOtps.map((otp) => {
-              const code = otp.manual_otp_code || '';
-              const waMessage = `مرحباً بك في منصة إعلاناتي 👋\nرمز التحقق (OTP) لعرض اشتراكاتك ومدفوعاتك هو: *${code}*\nصالح لمدة 10 دقائق، ولا تشاركه مع أي شخص.`;
-              const waUrl = formatWhatsAppLink(otp.phone_digits, waMessage);
-
-              return (
-                <div
-                  key={otp.id}
-                  className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 flex flex-wrap items-center justify-between gap-3"
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="font-extrabold text-sm text-slate-900 tabular-nums" dir="ltr">
-                        +{otp.phone_digits}
-                      </span>
-                      <span className="px-2.5 py-0.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 font-mono font-extrabold text-sm tracking-widest">
-                        {code}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void handleCopyOtp(otp)}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-bold transition-colors"
-                      >
-                        {copiedOtpId === otp.id ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-600" />
-                            تم النسخ
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" />
-                            نسخ الكود
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-slate-500 tabular-nums">
-                      صالح لمدة متبقية: <strong className="text-slate-700">{formatOtpRemaining(otp.expires_at)}</strong> · طُلب في{' '}
-                      {new Date(otp.created_at).toLocaleTimeString('ar-EG')}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <a
-                      href={waUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={() => void handleMarkOtpSent(otp, true)}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      إرسال الكود لواتساب العميل مجاناً
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => void handleMarkOtpSent(otp, false)}
-                      className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors"
-                    >
-                      تم الإرسال
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {/* Due Customers Preview Queue (Zero-Cost 1-Click Send) */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -736,10 +773,14 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
                 </label>
                 <input
                   type="text"
+                  name="wa_gateway_endpoint"
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-form-type="other"
                   dir="ltr"
                   value={config.whatsapp_endpoint}
                   onChange={(e) => setConfig({ ...config, whatsapp_endpoint: e.target.value })}
-                  placeholder="معرّف الاتصال أو الرابط"
+                  placeholder="instance12345 أو رابط HTTPS"
                   className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-left outline-none"
                 />
               </div>
@@ -751,6 +792,10 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
                 <div className="relative">
                   <input
                     type={showToken ? 'text' : 'password'}
+                    name="wa_gateway_secret"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-form-type="other"
                     dir="ltr"
                     value={config.whatsapp_token}
                     onChange={(e) => setConfig({ ...config, whatsapp_token: e.target.value })}
@@ -786,6 +831,22 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
               >
                 {runningExternal ? 'جاري التشغيل...' : 'تشغيل اختبار الربط الخارجي الآن'}
               </button>
+              {(config.whatsapp_endpoint || config.whatsapp_token || config.auto_whatsapp_enabled) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConfig({
+                      ...config,
+                      auto_whatsapp_enabled: false,
+                      whatsapp_endpoint: '',
+                      whatsapp_token: '',
+                    })
+                  }
+                  className="px-4 py-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold"
+                >
+                  تعطيل ومسح بيانات الربط
+                </button>
+              )}
             </div>
           </div>
         )}

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import webpush from 'web-push';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -166,7 +167,16 @@ async function sendOtpViaWhatsAppGateway(params: {
         signal: AbortSignal.timeout(10000),
       });
       const text = await res.text();
-      return { ok: res.ok, responseText: text.slice(0, 300) };
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = null;
+      }
+      const apiOk =
+        res.ok &&
+        !(parsed && (parsed.error || parsed.sent === 'false' || parsed.sent === false));
+      return { ok: apiOk, responseText: text.slice(0, 300) };
     }
 
     const url = assertSafeExternalHttpsUrl(endpoint);
@@ -308,16 +318,32 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
 
     const { data: cfg } = await supabase
       .from('elanati_automation_config')
-      .select('whatsapp_provider, whatsapp_endpoint, whatsapp_token')
+      .select('auto_whatsapp_enabled, whatsapp_provider, whatsapp_endpoint, whatsapp_token')
       .eq('id', 1)
       .maybeSingle();
 
+    const envEndpoint = (process.env.WHATSAPP_ENDPOINT || '').trim();
+    const envToken = (process.env.WHATSAPP_API_TOKEN || '').trim();
+    const useEnvGateway = Boolean(envEndpoint && envToken);
+    const useDbGateway = Boolean(
+      cfg?.auto_whatsapp_enabled && cfg?.whatsapp_endpoint?.trim() && cfg?.whatsapp_token?.trim()
+    );
+
     const provider = process.env.WHATSAPP_PROVIDER || cfg?.whatsapp_provider || 'ultramsg';
-    const endpoint = (process.env.WHATSAPP_ENDPOINT || cfg?.whatsapp_endpoint || '').trim();
-    const token = (process.env.WHATSAPP_API_TOKEN || cfg?.whatsapp_token || '').trim();
+    const endpoint = useEnvGateway
+      ? envEndpoint
+      : useDbGateway
+      ? String(cfg?.whatsapp_endpoint || '').trim()
+      : '';
+    const token = useEnvGateway
+      ? envToken
+      : useDbGateway
+      ? String(cfg?.whatsapp_token || '').trim()
+      : '';
 
     let deliveryChannel = 'admin_whatsapp';
     let deliveryStatus: 'sent' | 'pending_manual' | 'failed' = 'pending_manual';
+    let deliveryModeReason: 'not_configured' | 'gateway_failed' | 'sent' = 'not_configured';
 
     if (endpoint && token) {
       const dispatch = await sendOtpViaWhatsAppGateway({
@@ -330,9 +356,20 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
       if (dispatch.ok) {
         deliveryChannel = 'whatsapp';
         deliveryStatus = 'sent';
+        deliveryModeReason = 'sent';
       } else {
         deliveryChannel = 'admin_whatsapp';
         deliveryStatus = 'pending_manual';
+        deliveryModeReason = 'gateway_failed';
+        await supabase.from('elanati_whatsapp_logs').insert({
+          target_type: 'auto_reply',
+          target_id: `otp:${phoneDigits}`,
+          client_name: clientName || 'عميل بوابة الاشتراكات',
+          client_phone: phoneDigits,
+          message_body: 'تعذر إرسال رمز OTP تلقائياً عبر بوابة الواتساب؛ تم تحويله لقائمة الإرسال اليدوي.',
+          delivery_status: 'failed',
+          provider_response: dispatch.responseText,
+        });
       }
     }
 
@@ -350,16 +387,123 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
       return res.status(500).json({ error: 'تعذر إنشاء رمز التحقق، حاول مرة أخرى' });
     }
 
+    if (deliveryStatus === 'pending_manual') {
+      const waDigits = toWhatsAppDigits(phoneDigits);
+      const waText = `مرحباً بك في منصة إعلاناتي 👋\nرمز التحقق (OTP) لعرض اشتراكاتك ومدفوعاتك هو: *${otp}*\nصالح لمدة 10 دقائق، ولا تشاركه مع أي شخص.`;
+      const waDirectUrl = `https://wa.me/${encodeURIComponent(waDigits)}?text=${encodeURIComponent(waText)}`;
+
+      // A) Direct Web Push to Admin mobile/desktop devices (works even when browser is closed)
+      try {
+        const envPub = (process.env.VAPID_PUBLIC_KEY || '').trim();
+        const envPriv = (process.env.VAPID_PRIVATE_KEY || '').trim();
+        const envSubj = (process.env.VAPID_SUBJECT || 'mailto:admin@elanati.app').trim();
+
+        let vapidPub = envPub;
+        let vapidPriv = envPriv;
+        let vapidSubj = envSubj;
+
+        if (!vapidPub || !vapidPriv) {
+          const { data: vRow } = await supabase
+            .from('elanati_push_vapid_keys')
+            .select('public_key, private_key, subject')
+            .eq('id', 1)
+            .maybeSingle();
+          if (vRow?.public_key && vRow?.private_key) {
+            vapidPub = String(vRow.public_key);
+            vapidPriv = String(vRow.private_key);
+            vapidSubj = String(vRow.subject || envSubj);
+          }
+        }
+
+        if (vapidPub && vapidPriv) {
+          const { data: pushSubs } = await supabase
+            .from('elanati_admin_push_subscriptions')
+            .select('id, endpoint, p256dh, auth')
+            .limit(20);
+
+          if (pushSubs && pushSubs.length > 0) {
+            webpush.setVapidDetails(vapidSubj, vapidPub, vapidPriv);
+            const pushPayload = JSON.stringify({
+              title: `🔔 طلب كود OTP جديد — ${clientName || phoneDigits}`,
+              body: `الرقم ${phoneDigits} يطلب رمز التحقق (${otp}). اضغط للإرسال عبر واتساب الآن.`,
+              tag: `elanati-otp-${phoneDigits}`,
+              url: '/admin/automation',
+              whatsappUrl: waDirectUrl,
+            });
+
+            const expiredIds: string[] = [];
+            await Promise.all(
+              pushSubs.map(async (sub: any) => {
+                try {
+                  await webpush.sendNotification(
+                    {
+                      endpoint: sub.endpoint,
+                      keys: { p256dh: sub.p256dh, auth: sub.auth },
+                    },
+                    pushPayload,
+                    { TTL: 600 }
+                  );
+                } catch (pushErr: any) {
+                  if (pushErr?.statusCode === 404 || pushErr?.statusCode === 410) {
+                    expiredIds.push(sub.id);
+                  }
+                }
+              })
+            );
+
+            if (expiredIds.length > 0) {
+              await supabase
+                .from('elanati_admin_push_subscriptions')
+                .delete()
+                .in('id', expiredIds);
+            }
+          }
+        }
+      } catch {
+        // Non-blocking Web Push alert
+      }
+
+      // B) Optional Telegram Admin alert if explicitly configured
+      const tgBotToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+      const tgChatId = (process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim();
+      if (tgBotToken && tgChatId && /^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(tgBotToken)) {
+        try {
+          await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: tgChatId,
+              text:
+                `🔔 طلب رمز تحقق (OTP) جديد — منصة إعلاناتي\n\n` +
+                `👤 العميل: ${clientName || 'عميل مسجل'}\n` +
+                `📱 الموبايل: +${waDigits}\n` +
+                `🔑 الكود: ${otp}\n` +
+                `⏳ صالح لمدة 10 دقائق`,
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '📲 إرسال الكود لواتساب العميل الآن', url: waDirectUrl }],
+                ],
+              },
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch {
+          // Non-blocking admin alert
+        }
+      }
+    }
+
     return res.status(200).json({
       ok: true,
       maskedPhone: maskPhone(phoneDigits),
       clientName: clientName ? clientName.split(' ')[0] : null,
       deliveryChannel,
+      deliveryModeReason,
       expiresInMinutes: 10,
       message:
         deliveryStatus === 'sent'
-          ? `تم إرسال رمز التحقق المكون من 6 أرقام إلى واتساب رقم ${maskPhone(phoneDigits)}`
-          : `تم إنشاء رمز التحقق لرقم ${maskPhone(phoneDigits)} وجاري إرساله عبر واتساب المنصة`,
+          ? `تم إرسال رمز التحقق المكون من 6 أرقام تلقائياً إلى واتساب رقم ${maskPhone(phoneDigits)}`
+          : `تم تجهيز رمز التحقق لرقم ${maskPhone(phoneDigits)} لإرساله عبر واتساب المنصة الرسمي`,
     });
   }
 

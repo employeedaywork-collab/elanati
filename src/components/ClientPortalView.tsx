@@ -17,6 +17,7 @@ import {
   Plus,
   Receipt,
   RefreshCw,
+  Send,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -24,7 +25,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { DEFAULT_CATEGORIES } from '../data/seedData';
-import { escapeCsvCell, sanitizePhoneHref } from '../lib/supabase';
+import { escapeCsvCell, formatWhatsAppLink, sanitizePhoneHref } from '../lib/supabase';
 import {
   fetchPublicAutomationTemplates,
   fetchVerifiedClientPortal,
@@ -383,7 +384,10 @@ export default function ClientPortalView({
               <div>
                 <h3 className="text-lg font-extrabold text-slate-900">أدخل رمز التحقق (OTP)</h3>
                 <p className="text-xs text-slate-600 mt-0.5 tabular-nums">
-                  الرقم المسجل: <strong className="text-slate-900">{otpMeta?.maskedPhone}</strong>
+                  الرقم المسجل:{' '}
+                  <strong className="text-slate-900 font-mono inline-block" dir="ltr">
+                    {otpMeta?.maskedPhone}
+                  </strong>
                 </p>
               </div>
             </div>
@@ -402,12 +406,47 @@ export default function ClientPortalView({
           </div>
 
           {otpMeta?.message && (
-            <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold leading-relaxed">
-              {otpMeta.message}
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold leading-relaxed space-y-2.5">
+              <p>
+                {otpMeta.deliveryChannel === 'whatsapp' ? (
+                  <>
+                    تم إرسال رمز التحقق المكون من 6 أرقام تلقائياً إلى واتساب رقم{' '}
+                    <span dir="ltr" className="inline-block font-mono">
+                      {otpMeta.maskedPhone}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    تم تجهيز رمز التحقق للرقم{' '}
+                    <span dir="ltr" className="inline-block font-mono">
+                      {otpMeta.maskedPhone}
+                    </span>{' '}
+                    بنجاح وهو الآن جاهز للإرسال عبر واتساب الإدارة الرسمي (
+                    <span dir="ltr" className="inline-block font-mono">
+                      {settings.contact_phone}
+                    </span>
+                    ).
+                  </>
+                )}
+              </p>
               {otpMeta.deliveryChannel === 'admin_whatsapp' && (
-                <p className="mt-1 font-medium text-emerald-700">
-                  يتم الإرسال عبر واتساب المنصة الرسمي ({settings.contact_phone}).
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/80">
+                  <span className="font-medium text-emerald-800">
+                    يصلك الرمز من واتساب الإدارة خلال لحظات، أو يمكنك مراسلة الإدارة الآن لاستلامه فوراً:
+                  </span>
+                  <a
+                    href={formatWhatsAppLink(
+                      settings.whatsapp_number || settings.contact_phone,
+                      `مرحباً إدارة منصة إعلاناتي 👋\nطلبت رمز التحقق (OTP) للدخول إلى اشتراكاتي برقم: ${query.trim()}`
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition-colors shrink-0"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    استلام الكود عبر واتساب المنصة
+                  </a>
+                </div>
               )}
             </div>
           )}
@@ -475,7 +514,11 @@ export default function ClientPortalView({
             <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span className="tabular-nums">
-                تم تأكيد ملكية رقمك ({verifiedPhoneLabel}) عبر OTP — لا يرى هذه البيانات سواك
+                تم تأكيد ملكية رقمك (
+                <span dir="ltr" className="inline-block font-mono">
+                  {verifiedPhoneLabel}
+                </span>
+                ) عبر OTP — لا يرى هذه البيانات سواك
               </span>
             </div>
             <div className="flex items-center gap-2">

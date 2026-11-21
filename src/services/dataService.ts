@@ -836,14 +836,31 @@ export async function fetchAdminBadgeCounts(): Promise<{
   pendingAds: number;
   openTickets: number;
   pendingPackages: number;
+  pendingOtps: number;
 }> {
   if (supabase) {
-    const rpcRes = await supabase.rpc('admin_get_dashboard_counts');
+    const nowIso = new Date().toISOString();
+    const [rpcRes, otpsRes] = await Promise.all([
+      supabase.rpc('admin_get_dashboard_counts'),
+      supabase
+        .from('elanati_portal_otps')
+        .select('id', { count: 'exact', head: true })
+        .eq('delivery_status', 'pending_manual')
+        .is('verified_at', null)
+        .gt('expires_at', nowIso)
+        .not('manual_otp_code', 'is', null),
+    ]);
+    const pendingOtps =
+      !otpsRes.error && typeof otpsRes.count === 'number'
+        ? otpsRes.count
+        : Number(rpcRes.data?.pending_otps || 0);
+
     if (!rpcRes.error && rpcRes.data) {
       return {
         pendingAds: Number(rpcRes.data.pending_ads || 0),
         openTickets: Number(rpcRes.data.open_tickets || 0),
         pendingPackages: Number(rpcRes.data.pending_packages || 0),
+        pendingOtps,
       };
     }
 
@@ -862,6 +879,7 @@ export async function fetchAdminBadgeCounts(): Promise<{
       pendingAds: adsRes.count || 0,
       openTickets: ticketsRes.count || 0,
       pendingPackages: pkgsRes.count || 0,
+      pendingOtps,
     };
   }
 
@@ -872,6 +890,7 @@ export async function fetchAdminBadgeCounts(): Promise<{
     pendingAds: ads.filter((a) => a.status === 'pending').length,
     openTickets: tickets.filter((t) => t.status === 'new' || t.status === 'in_progress').length,
     pendingPackages: pkgs.filter((r) => r.status === 'pending').length,
+    pendingOtps: 0,
   };
 }
 
@@ -2479,3 +2498,84 @@ export async function markPortalOtpSentAdmin(id: string): Promise<void> {
     .eq('id', id);
 }
 
+async function getAdminAccessToken(): Promise<string | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token || null;
+}
+
+export async function fetchAdminPushConfig(): Promise<{
+  publicKey: string;
+  subscriptionCount: number;
+} | null> {
+  const token = await getAdminAccessToken();
+  if (!token) return null;
+
+  const res = await fetch('/api/admin/push', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.publicKey) {
+    throw new Error(data?.error || 'تعذر تجهيز إعدادات إشعارات Web Push');
+  }
+  return {
+    publicKey: String(data.publicKey),
+    subscriptionCount: Number(data.subscriptionCount || 0),
+  };
+}
+
+export async function subscribeAdminWebPush(subscription: PushSubscriptionJSON): Promise<void> {
+  const token = await getAdminAccessToken();
+  if (!token) {
+    throw new Error('يرجى تسجيل الدخول بحساب المدير أولاً');
+  }
+
+  const res = await fetch('/api/admin/push', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action: 'subscribe', subscription }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || 'تعذر حفظ اشتراك إشعارات الموبايل');
+  }
+}
+
+export async function unsubscribeAdminWebPush(endpoint: string): Promise<void> {
+  const token = await getAdminAccessToken();
+  if (!token) return;
+
+  await fetch('/api/admin/push', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action: 'unsubscribe', endpoint }),
+  });
+}
+
+export async function sendTestAdminWebPush(): Promise<number> {
+  const token = await getAdminAccessToken();
+  if (!token) {
+    throw new Error('يرجى تسجيل الدخول بحساب المدير أولاً');
+  }
+
+  const res = await fetch('/api/admin/push', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action: 'test' }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || 'تعذر إرسال إشعار تجريبي');
+  }
+  return Number(data.sent || 1);
+}

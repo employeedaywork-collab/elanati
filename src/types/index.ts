@@ -173,6 +173,7 @@ export interface PortalOtpRequestResult {
   maskedPhone: string;
   clientName?: string | null;
   deliveryChannel: string;
+  deliveryModeReason?: 'not_configured' | 'gateway_failed' | 'sent';
   expiresInMinutes: number;
   message: string;
   previewOtp?: string;

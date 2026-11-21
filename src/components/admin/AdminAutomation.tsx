@@ -2,12 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Archive,
   Bot,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
+  Copy,
   Eye,
   EyeOff,
+  KeyRound,
   MessageCircle,
   RefreshCw,
   RotateCcw,
@@ -16,18 +19,22 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { DEFAULT_AUTOMATION_CONFIG } from '../../data/seedData';
+import { formatWhatsAppLink } from '../../lib/supabase';
 import {
   archiveExpiredAdsAdmin,
   fetchAutomationConfigAdmin,
+  fetchPendingPortalOtpsAdmin,
   fetchWhatsAppLogsAdmin,
   findPendingAutomationTargetsAdmin,
   markDirectWhatsAppSentAdmin,
+  markPortalOtpSentAdmin,
   runAutomationNowAdmin,
   updateAutomationConfigAdmin,
 } from '../../services/dataService';
 import {
   AutomationConfig,
   AutomationTargetPreview,
+  PendingPortalOtp,
   WhatsAppLog,
   WhatsAppProvider,
 } from '../../types';
@@ -45,11 +52,14 @@ const LOG_TYPE_LABEL: Record<WhatsAppLog['target_type'], string> = {
 export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
   const [config, setConfig] = useState<AutomationConfig>(DEFAULT_AUTOMATION_CONFIG);
   const [targets, setTargets] = useState<AutomationTargetPreview[]>([]);
+  const [pendingOtps, setPendingOtps] = useState<PendingPortalOtp[]>([]);
   const [logs, setLogs] = useState<WhatsAppLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [runningExternal, setRunningExternal] = useState(false);
+  const [refreshingOtps, setRefreshingOtps] = useState(false);
+  const [copiedOtpId, setCopiedOtpId] = useState<string | null>(null);
   const [showExternalPanel, setShowExternalPanel] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -57,14 +67,16 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
   const loadAutomation = useCallback(async () => {
     setLoading(true);
     try {
-      const [cfg, pendingTargets, waLogs] = await Promise.all([
+      const [cfg, pendingTargets, waLogs, otpQueue] = await Promise.all([
         fetchAutomationConfigAdmin(),
         findPendingAutomationTargetsAdmin(),
         fetchWhatsAppLogsAdmin(),
+        fetchPendingPortalOtpsAdmin(),
       ]);
       setConfig(cfg);
       setTargets(pendingTargets);
       setLogs(waLogs);
+      setPendingOtps(otpQueue);
     } finally {
       setLoading(false);
     }
@@ -121,6 +133,51 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     } catch {
       // allow WhatsApp link to open regardless
     }
+  };
+
+  const handleRefreshOtps = async () => {
+    setRefreshingOtps(true);
+    try {
+      const otpQueue = await fetchPendingPortalOtpsAdmin();
+      setPendingOtps(otpQueue);
+    } finally {
+      setRefreshingOtps(false);
+    }
+  };
+
+  const handleMarkOtpSent = async (otp: PendingPortalOtp, viaWhatsApp = false) => {
+    try {
+      await markPortalOtpSentAdmin(otp.id);
+      setPendingOtps((prev) => prev.filter((item) => item.id !== otp.id));
+      setFeedback({
+        type: 'ok',
+        text: viaWhatsApp
+          ? `تم فتح واتساب لإرسال رمز التحقق للرقم ${otp.phone_digits} وتحديث حالته.`
+          : `تم تأكيد إرسال رمز التحقق للرقم ${otp.phone_digits}.`,
+      });
+    } catch {
+      // allow WhatsApp link to open regardless
+    }
+  };
+
+  const handleCopyOtp = async (otp: PendingPortalOtp) => {
+    if (!otp.manual_otp_code || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(otp.manual_otp_code);
+      setCopiedOtpId(otp.id);
+      setTimeout(() => setCopiedOtpId((cur) => (cur === otp.id ? null : cur)), 2000);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const formatOtpRemaining = (expiresAt: string): string => {
+    const diffMs = new Date(expiresAt).getTime() - Date.now();
+    if (diffMs <= 0) return 'منتهي';
+    const totalSec = Math.ceil(diffMs / 1000);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return mins > 0 ? `${mins} د ${secs} ث` : `${secs} ث`;
   };
 
   const handleRunExternalNow = async () => {
@@ -422,6 +479,113 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
           </div>
         </div>
       </form>
+
+      {/* Pending Client Portal OTPs (Zero-Cost 1-Click WhatsApp OTP Queue) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+              <KeyRound className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-extrabold text-slate-900">
+                  رموز التحقق (OTP) لواتساب العملاء ({pendingOtps.length})
+                </h3>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200">
+                  إرسال مجاني بضغطة زر
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                عند طلب العميل عرض اشتراكاته بدون بوابة واتساب مدفوعة، يظهر الرمز هنا لإرساله لرقمه عبر واتساب مباشرة (صالح لمدة 10 دقائق).
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            disabled={refreshingOtps}
+            onClick={() => void handleRefreshOtps()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshingOtps ? 'animate-spin' : ''}`} />
+            تحديث الطلبات
+          </button>
+        </div>
+
+        {pendingOtps.length === 0 ? (
+          <div className="p-6 rounded-2xl bg-slate-50 border border-slate-100 text-center text-xs font-semibold text-slate-500">
+            لا توجد طلبات رموز تحقق (OTP) بانتظار الإرسال اليدوي حالياً.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pendingOtps.map((otp) => {
+              const code = otp.manual_otp_code || '';
+              const waMessage = `مرحباً بك في منصة إعلاناتي 👋\nرمز التحقق (OTP) لعرض اشتراكاتك ومدفوعاتك هو: *${code}*\nصالح لمدة 10 دقائق، ولا تشاركه مع أي شخص.`;
+              const waUrl = formatWhatsAppLink(otp.phone_digits, waMessage);
+
+              return (
+                <div
+                  key={otp.id}
+                  className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <span className="font-extrabold text-sm text-slate-900 tabular-nums" dir="ltr">
+                        +{otp.phone_digits}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 font-mono font-extrabold text-sm tracking-widest">
+                        {code}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyOtp(otp)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-bold transition-colors"
+                      >
+                        {copiedOtpId === otp.id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            تم النسخ
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            نسخ الكود
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-500 tabular-nums">
+                      صالح لمدة متبقية: <strong className="text-slate-700">{formatOtpRemaining(otp.expires_at)}</strong> · طُلب في{' '}
+                      {new Date(otp.created_at).toLocaleTimeString('ar-EG')}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <a
+                      href={waUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => void handleMarkOtpSent(otp, true)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      إرسال الكود لواتساب العميل مجاناً
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => void handleMarkOtpSent(otp, false)}
+                      className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors"
+                    >
+                      تم الإرسال
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Due Customers Preview Queue (Zero-Cost 1-Click Send) */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">

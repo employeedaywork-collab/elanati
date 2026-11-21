@@ -522,7 +522,7 @@ AS $$
   ORDER BY sm.created_at ASC;
 $$;
 
--- بوابة العميل: الاستعلام برقم الهاتف أو كود الاشتراك مع إخفاء البيانات الحساسة عند البحث بالهاتف العام فقط
+-- بوابة العميل: محصورة لجلسات التحقق عبر OTP (service_role) أو مدير المنصة فقط
 CREATE OR REPLACE FUNCTION public.get_elanati_client_portal(p_query text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -535,10 +535,15 @@ DECLARE
   v_digits text := regexp_replace(v_clean, '\D', '', 'g');
   v_sub record;
   v_phone text := NULL;
-  v_by_code boolean := false;
   v_ads jsonb;
   v_payments jsonb;
 BEGIN
+  IF current_user NOT IN ('postgres', 'supabase_admin')
+     AND COALESCE(auth.role(), '') <> 'service_role'
+     AND NOT public.is_elanati_admin() THEN
+    RAISE EXCEPTION 'يجب تأكيد رقم الموبايل عبر رمز التحقق (OTP) أولاً لعرض الاشتراكات';
+  END IF;
+
   IF v_clean = '' THEN
     RETURN jsonb_build_object('subscription', NULL, 'payments', '[]'::jsonb, 'ads', '[]'::jsonb);
   END IF;
@@ -556,7 +561,6 @@ BEGIN
 
   IF v_sub.id IS NOT NULL THEN
     v_phone := regexp_replace(v_sub.client_phone, '\D', '', 'g');
-    v_by_code := (v_sub.subscription_code IS NOT NULL AND upper(trim(v_sub.subscription_code)) = upper(v_clean));
   ELSE
     v_phone := v_digits;
   END IF;
@@ -565,26 +569,9 @@ BEGIN
   INTO v_payments
   FROM (
     SELECT
-      id,
-      CASE
-        WHEN subscription_code IS NULL THEN NULL
-        WHEN v_by_code THEN subscription_code
-        ELSE left(subscription_code, 4) || '***' || right(subscription_code, 2)
-      END AS subscription_code,
-      package_name, billing_cycle, price_egp, payment_method,
-      CASE
-        WHEN payment_reference IS NULL THEN NULL
-        WHEN v_by_code THEN payment_reference
-        WHEN length(payment_reference) > 4 THEN '••••' || right(payment_reference, 4)
-        ELSE 'مسجل'
-      END AS payment_reference,
-      client_name, client_phone, company_name, status, max_ads, starts_at, expires_at,
-      CASE
-        WHEN api_key IS NULL THEN NULL
-        WHEN v_by_code THEN api_key
-        ELSE '••••' || right(api_key, 4)
-      END AS api_key,
-      account_manager_name, account_manager_phone, created_at
+      id, subscription_code, package_name, billing_cycle, price_egp, payment_method,
+      payment_reference, client_name, client_phone, company_name, status, max_ads,
+      starts_at, expires_at, api_key, account_manager_name, account_manager_phone, created_at
     FROM public.elanati_package_requests
     WHERE (subscription_code IS NOT NULL AND upper(trim(subscription_code)) = upper(v_clean))
        OR (v_phone <> '' AND regexp_replace(client_phone, '\D', '', 'g') = v_phone)
@@ -595,16 +582,11 @@ BEGIN
   FROM (
     SELECT
       id, title, category, description, contact, city, image, image_url,
-      extra_images, banner_url, package_name,
-      CASE
-        WHEN subscription_code IS NULL THEN NULL
-        WHEN v_by_code THEN subscription_code
-        ELSE left(subscription_code, 4) || '***' || right(subscription_code, 2)
-      END AS subscription_code,
+      extra_images, banner_url, package_name, subscription_code,
       priority_rank, status, featured, views_count, client_edits_count,
       last_client_edited_at, starts_at, expires_at, created_at
     FROM public.elanati_ads
-    WHERE (v_by_code AND v_sub.subscription_code IS NOT NULL AND upper(COALESCE(subscription_code, '')) = upper(v_sub.subscription_code))
+    WHERE (v_sub.subscription_code IS NOT NULL AND upper(COALESCE(subscription_code, '')) = upper(v_sub.subscription_code))
        OR (v_phone <> '' AND regexp_replace(contact, '\D', '', 'g') = v_phone)
   ) a;
 
@@ -612,23 +594,12 @@ BEGIN
     'subscription',
     CASE WHEN v_sub.id IS NOT NULL THEN jsonb_build_object(
       'id', v_sub.id,
-      'subscription_code',
-      CASE
-        WHEN v_sub.subscription_code IS NULL THEN NULL
-        WHEN v_by_code THEN v_sub.subscription_code
-        ELSE left(v_sub.subscription_code, 4) || '***' || right(v_sub.subscription_code, 2)
-      END,
+      'subscription_code', v_sub.subscription_code,
       'package_name', v_sub.package_name,
       'billing_cycle', v_sub.billing_cycle,
       'price_egp', v_sub.price_egp,
       'payment_method', v_sub.payment_method,
-      'payment_reference',
-      CASE
-        WHEN v_sub.payment_reference IS NULL THEN NULL
-        WHEN v_by_code THEN v_sub.payment_reference
-        WHEN length(v_sub.payment_reference) > 4 THEN '••••' || right(v_sub.payment_reference, 4)
-        ELSE 'مسجل'
-      END,
+      'payment_reference', v_sub.payment_reference,
       'client_name', v_sub.client_name,
       'client_phone', v_sub.client_phone,
       'company_name', v_sub.company_name,
@@ -636,12 +607,7 @@ BEGIN
       'max_ads', v_sub.max_ads,
       'starts_at', v_sub.starts_at,
       'expires_at', v_sub.expires_at,
-      'api_key',
-      CASE
-        WHEN v_sub.api_key IS NULL THEN NULL
-        WHEN v_by_code THEN v_sub.api_key
-        ELSE '••••' || right(v_sub.api_key, 4)
-      END,
+      'api_key', v_sub.api_key,
       'account_manager_name', v_sub.account_manager_name,
       'account_manager_phone', v_sub.account_manager_phone,
       'created_at', v_sub.created_at
@@ -1516,14 +1482,54 @@ END;
 $$;
 
 -- ============================================================================
+-- 11) جداول التحقق برمز OTP وجلسات بوابة الاشتراكات (حماية خصوصية المشتركين)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.elanati_portal_otps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_digits text NOT NULL,
+  otp_hash text NOT NULL,
+  delivery_channel text NOT NULL DEFAULT 'whatsapp',
+  delivery_status text NOT NULL DEFAULT 'pending_manual' CHECK (delivery_status IN ('sent', 'pending_manual', 'failed')),
+  manual_otp_code text,
+  attempts integer NOT NULL DEFAULT 0,
+  expires_at timestamptz NOT NULL,
+  verified_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_elanati_portal_otps_phone
+  ON public.elanati_portal_otps (phone_digits, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.elanati_portal_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash text UNIQUE NOT NULL,
+  phone_digits text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_elanati_portal_sessions_token
+  ON public.elanati_portal_sessions (token_hash, expires_at);
+
+ALTER TABLE public.elanati_portal_otps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.elanati_portal_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can manage portal otps" ON public.elanati_portal_otps;
+CREATE POLICY "Admins can manage portal otps"
+  ON public.elanati_portal_otps FOR ALL
+  TO authenticated
+  USING (public.is_elanati_admin())
+  WITH CHECK (public.is_elanati_admin());
+
+-- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 
--- جدول مديري المنصة وجداول الأتمتة ورسائل العملاء: حظر تام على الزوار
-REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs FROM anon, authenticated;
+-- جدول مديري المنصة وجداول الأتمتة ورموز OTP وجلسات البوابة: حظر تام على الزوار
+REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_portal_sessions FROM anon, authenticated;
 GRANT SELECT ON public.elanati_admins TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_automation_config, public.elanati_whatsapp_logs TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps TO authenticated;
 
 -- جدول الإعلانات: استعلامات العامة والمستخدمين العاديين تقتصر على الأعمدة العامة الآمنة فقط
 REVOKE ALL ON public.elanati_ads FROM anon, authenticated;
@@ -1543,7 +1549,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_contact_messages, public.
 GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_messages(text) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.get_elanati_client_portal(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.edit_elanati_ad_by_client(uuid, text, text, text, text, text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_public_templates() TO anon, authenticated;

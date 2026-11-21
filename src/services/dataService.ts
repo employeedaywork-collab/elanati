@@ -28,6 +28,9 @@ import {
   PackageRequest,
   PackageRequestStatus,
   PaymentMethod,
+  PendingPortalOtp,
+  PortalOtpRequestResult,
+  PortalOtpVerifyResult,
   SiteSettings,
   SupportMessage,
   Testimonial,
@@ -495,32 +498,49 @@ export async function checkAdAllowance(
   };
 }
 
-export async function fetchClientPortal(query: string): Promise<ClientPortalData> {
+const PORTAL_SESSION_KEY = 'elanati_portal_session_v1';
+const PREVIEW_OTP_KEY = 'elanati_preview_portal_otp_v1';
+
+interface StoredPortalSession {
+  portalToken: string;
+  maskedPhone: string;
+  expiresAt: string;
+  query?: string;
+}
+
+export function getStoredPortalSession(): StoredPortalSession | null {
+  try {
+    const raw = sessionStorage.getItem(PORTAL_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredPortalSession;
+    if (!parsed?.portalToken || !parsed?.expiresAt) return null;
+    if (new Date(parsed.expiresAt).getTime() <= Date.now()) {
+      sessionStorage.removeItem(PORTAL_SESSION_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredPortalSession(session: StoredPortalSession): void {
+  try {
+    sessionStorage.setItem(PORTAL_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function maskPhoneLocal(digits: string): string {
+  const clean = digits.replace(/\D/g, '');
+  if (clean.length <= 5) return '•••••';
+  return `${clean.slice(0, 3)}•••••${clean.slice(-3)}`;
+}
+
+function buildLocalPortalData(query: string): ClientPortalData {
   const clean = query.trim();
   if (!clean) return { subscription: null, payments: [], ads: [] };
-
-  if (supabase) {
-    const { data, error } = await supabase.rpc('get_elanati_client_portal', {
-      p_query: clean,
-    });
-    if (!error && data) {
-      const payload = data as {
-        subscription: PackageRequest | null;
-        payments?: PackageRequest[];
-        ads: any[];
-      };
-      const payments = Array.isArray(payload.payments)
-        ? payload.payments
-        : payload.subscription
-        ? [payload.subscription]
-        : [];
-      return {
-        subscription: payload.subscription || null,
-        payments,
-        ads: Array.isArray(payload.ads) ? payload.ads.map(normalizeAdRow) : [],
-      };
-    }
-  }
 
   const digits = normalizeDigits(clean);
   const upper = clean.toUpperCase();
@@ -537,55 +557,213 @@ export async function fetchClientPortal(query: string): Promise<ClientPortalData
       return b.created_at.localeCompare(a.created_at);
     });
 
-  const subscriptionRaw = matchingReqs[0] || null;
-  const byCode = Boolean(
-    subscriptionRaw?.subscription_code && subscriptionRaw.subscription_code.toUpperCase() === upper
-  );
-  const maskSubCode = (code?: string | null) => {
-    if (!code) return null;
-    if (byCode) return code;
-    return `${code.slice(0, 4)}***${code.slice(-2)}`;
-  };
-  const maskSecretTail = (val?: string | null) => {
-    if (!val) return null;
-    if (byCode) return val;
-    return val.length > 4 ? `••••${val.slice(-4)}` : 'مسجل';
-  };
-  const sanitizeReqForPortal = (r: PackageRequest): PackageRequest => ({
-    ...r,
-    subscription_code: maskSubCode(r.subscription_code),
-    payment_reference: maskSecretTail(r.payment_reference),
-    api_key: maskSecretTail(r.api_key),
-    notes: null,
-    admin_note: null,
-  });
-
-  const subscription = subscriptionRaw ? sanitizeReqForPortal(subscriptionRaw) : null;
-  const phoneLookup = subscriptionRaw ? normalizeDigits(subscriptionRaw.client_phone) : digits;
+  const subscription = matchingReqs[0] || null;
+  const phoneLookup = subscription ? normalizeDigits(subscription.client_phone) : digits;
   const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   const clientAds = ads
     .filter(
       (a) =>
-        (byCode &&
-          subscriptionRaw?.subscription_code &&
+        (subscription?.subscription_code &&
           (a.subscription_code || '').toUpperCase() ===
-            subscriptionRaw.subscription_code.toUpperCase()) ||
+            subscription.subscription_code.toUpperCase()) ||
         (phoneLookup && normalizeDigits(a.contact) === phoneLookup)
     )
     .map((a) => {
       const normalized = normalizeAdRow(a);
       const { owner_pin: _pin, admin_note: _note, ...safeAd } = normalized;
-      return {
-        ...safeAd,
-        subscription_code: maskSubCode(normalized.subscription_code),
-      };
+      return safeAd;
     })
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  const payments = [...matchingReqs]
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map(sanitizeReqForPortal);
+  const payments = [...matchingReqs].sort((a, b) => b.created_at.localeCompare(a.created_at));
   return { subscription, payments, ads: clientAds };
+}
+
+export async function requestPortalOtp(query: string): Promise<PortalOtpRequestResult> {
+  const clean = query.trim();
+  if (!clean) {
+    throw new Error('أدخل رقم الموبايل أو كود الاشتراك أولاً');
+  }
+
+  if (isSupabaseConfigured) {
+    const res = await fetch('/api/portal/otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'request', query: clean }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json?.error || 'تعذر إرسال رمز التحقق حالياً');
+    }
+    return json as PortalOtpRequestResult;
+  }
+
+  if (!isPreviewAuthAllowed()) {
+    throw new Error('خدمة التحقق برمز OTP غير متاحة حالياً');
+  }
+
+  const localData = buildLocalPortalData(clean);
+  if (!localData.subscription && localData.ads.length === 0) {
+    throw new Error('لم نعثر على اشتراك أو إعلان مسجل بهذا الرقم أو الكود');
+  }
+
+  const phone =
+    localData.subscription?.client_phone ||
+    localData.ads[0]?.contact ||
+    normalizeDigits(clean);
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  try {
+    sessionStorage.setItem(
+      PREVIEW_OTP_KEY,
+      JSON.stringify({ query: clean, phone, otp, expiresAt: Date.now() + 10 * 60 * 1000 })
+    );
+  } catch {
+    // ignore
+  }
+
+  return {
+    ok: true,
+    maskedPhone: maskPhoneLocal(phone),
+    deliveryChannel: 'preview',
+    expiresInMinutes: 10,
+    message: `تم إرسال رمز التحقق التجريبي لرقم ${maskPhoneLocal(phone)}`,
+    previewOtp: otp,
+  };
+}
+
+export async function verifyPortalOtp(query: string, otp: string): Promise<PortalOtpVerifyResult> {
+  const cleanQuery = query.trim();
+  const cleanOtp = otp.replace(/\D/g, '').trim();
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    throw new Error('أدخل رمز التحقق المكون من 6 أرقام');
+  }
+
+  if (isSupabaseConfigured) {
+    const res = await fetch('/api/portal/otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'verify', query: cleanQuery, otp: cleanOtp }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json?.portalToken) {
+      throw new Error(json?.error || 'رمز التحقق غير صحيح أو منتهي الصلاحية');
+    }
+    const result = json as PortalOtpVerifyResult;
+    saveStoredPortalSession({
+      portalToken: result.portalToken,
+      maskedPhone: result.maskedPhone,
+      expiresAt: result.expiresAt,
+      query: cleanQuery,
+    });
+    return {
+      ...result,
+      portal: {
+        subscription: result.portal?.subscription || null,
+        payments: Array.isArray(result.portal?.payments) ? result.portal.payments : [],
+        ads: Array.isArray(result.portal?.ads) ? result.portal.ads.map(normalizeAdRow) : [],
+      },
+    };
+  }
+
+  if (!isPreviewAuthAllowed()) {
+    throw new Error('خدمة التحقق غير متاحة');
+  }
+
+  let stored: { query: string; phone: string; otp: string; expiresAt: number } | null = null;
+  try {
+    const raw = sessionStorage.getItem(PREVIEW_OTP_KEY);
+    if (raw) stored = JSON.parse(raw);
+  } catch {
+    stored = null;
+  }
+
+  if (!stored || stored.expiresAt <= Date.now() || stored.otp !== cleanOtp) {
+    throw new Error('رمز التحقق غير صحيح أو منتهي الصلاحية');
+  }
+
+  const portalToken = `preview-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const maskedPhone = maskPhoneLocal(stored.phone);
+  const portal = buildLocalPortalData(stored.phone || cleanQuery);
+  saveStoredPortalSession({
+    portalToken,
+    maskedPhone,
+    expiresAt,
+    query: stored.phone || cleanQuery,
+  });
+
+  return {
+    ok: true,
+    portalToken,
+    expiresAt,
+    maskedPhone,
+    portal,
+  };
+}
+
+export async function fetchVerifiedClientPortal(): Promise<{
+  maskedPhone: string;
+  expiresAt: string;
+  portal: ClientPortalData;
+}> {
+  const stored = getStoredPortalSession();
+  if (!stored) {
+    throw new Error('يرجى تأكيد رقم الموبايل برمز التحقق (OTP) أولاً');
+  }
+
+  if (isSupabaseConfigured) {
+    const res = await fetch('/api/portal/otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'fetch', portalToken: stored.portalToken }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      try {
+        sessionStorage.removeItem(PORTAL_SESSION_KEY);
+      } catch {
+        // ignore
+      }
+      throw new Error(json?.error || 'انتهت جلسة التحقق، يرجى طلب رمز OTP جديد');
+    }
+    return {
+      maskedPhone: json.maskedPhone || stored.maskedPhone,
+      expiresAt: json.expiresAt || stored.expiresAt,
+      portal: {
+        subscription: json.portal?.subscription || null,
+        payments: Array.isArray(json.portal?.payments) ? json.portal.payments : [],
+        ads: Array.isArray(json.portal?.ads) ? json.portal.ads.map(normalizeAdRow) : [],
+      },
+    };
+  }
+
+  return {
+    maskedPhone: stored.maskedPhone,
+    expiresAt: stored.expiresAt,
+    portal: buildLocalPortalData(stored.query || ''),
+  };
+}
+
+export async function logoutPortalSession(): Promise<void> {
+  const stored = getStoredPortalSession();
+  try {
+    sessionStorage.removeItem(PORTAL_SESSION_KEY);
+    sessionStorage.removeItem(PREVIEW_OTP_KEY);
+  } catch {
+    // ignore
+  }
+  if (isSupabaseConfigured && stored?.portalToken) {
+    await fetch('/api/portal/otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'logout', portalToken: stored.portalToken }),
+    }).catch(() => undefined);
+  }
+}
+
+export async function fetchClientPortal(_query: string): Promise<ClientPortalData> {
+  const verified = await fetchVerifiedClientPortal();
+  return verified.portal;
 }
 
 // ============================================================================
@@ -1086,11 +1264,11 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
   const ticketCode = generateTicketCode();
   const now = new Date().toISOString();
 
-  // Check if client has active paid plan for priority support
+  // Check if client has active paid plan for priority support (computed server-side when Supabase is active)
   let hasPriority = false;
-  if (input.phone) {
+  if (!supabase && input.phone) {
     try {
-      const portal = await fetchClientPortal(input.phone);
+      const portal = buildLocalPortalData(input.phone);
       if (portal.subscription?.status === 'activated') {
         hasPriority = true;
       }
@@ -1170,7 +1348,7 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
   // Local automatic intelligent reply inside the platform ($0 external cost)
   try {
     const portal: ClientPortalData = input.phone
-      ? await fetchClientPortal(input.phone)
+      ? buildLocalPortalData(input.phone)
       : { subscription: null, payments: [], ads: [] };
     const cfg = await fetchAutomationConfigAdmin();
     const matchedSub = portal.subscription;
@@ -2273,3 +2451,31 @@ export async function markDirectWhatsAppSentAdmin(target: AutomationTargetPrevie
   };
   writeLocal(STORAGE_KEYS.whatsappLogs, [localLog, ...existingLogs]);
 }
+
+export async function fetchPendingPortalOtpsAdmin(): Promise<PendingPortalOtp[]> {
+  if (supabase) {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('elanati_portal_otps')
+      .select('id, phone_digits, manual_otp_code, delivery_status, expires_at, created_at')
+      .eq('delivery_status', 'pending_manual')
+      .is('verified_at', null)
+      .gt('expires_at', nowIso)
+      .not('manual_otp_code', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(25);
+    if (!error && Array.isArray(data)) {
+      return data as PendingPortalOtp[];
+    }
+  }
+  return [];
+}
+
+export async function markPortalOtpSentAdmin(id: string): Promise<void> {
+  if (!supabase) return;
+  await supabase
+    .from('elanati_portal_otps')
+    .update({ delivery_status: 'sent' })
+    .eq('id', id);
+}
+

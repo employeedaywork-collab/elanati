@@ -1,0 +1,11 @@
+# 1. الدخول لمجلد المستودع وجلب آخر تحديث من GitHub
+cd "D:\اعلاناتي\elanati"
+git pull --rebase origin main
+
+# 2. نسخ الملفات الجديدة من D:\اعلاناتي إلى مجلد المستودع (مع استثناء node_modules و .git و .env)
+robocopy "D:\اعلاناتي" "D:\اعلاناتي\elanati" /E /XD node_modules dist .git elanati aistudio /XF .env bun.lock
+
+# 3. رفع التعديلات إلى GitHub
+git add .
+git commit -m "Add subscriptions portal, EGP payments tracking, and one-time client ad edit"
+git push origin main

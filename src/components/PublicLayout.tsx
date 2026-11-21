@@ -13,12 +13,13 @@ import {
 import {
   createAd,
   fetchCategories,
-  fetchClientPortal,
   fetchPackages,
   fetchPublicAds,
   fetchPublicAutomationTemplates,
   fetchSiteSettings,
+  fetchVerifiedClientPortal,
   getAdminSession,
+  getStoredPortalSession,
   incrementAdViews,
   renderWhatsAppTemplate,
 } from '../services/dataService';
@@ -116,26 +117,24 @@ export default function PublicLayout() {
     void loadData();
   }, [loadData]);
 
-  // Automatic zero-cost in-platform reminder check for returning advertisers
+  // Automatic zero-cost in-platform reminder check only when client already verified OTP session
   useEffect(() => {
-    let savedQuery = '';
+    const verifiedSession = getStoredPortalSession();
+    if (!verifiedSession) return;
     try {
-      savedQuery =
-        localStorage.getItem('elanati_last_sub_code') ||
-        localStorage.getItem('elanati_last_client_phone') ||
-        '';
       if (sessionStorage.getItem('elanati_reminder_dismissed') === '1') return;
     } catch {
       return;
     }
-    if (!savedQuery.trim()) return;
 
+    const savedQuery = verifiedSession.query || '';
     void (async () => {
       try {
-        const [portal, tpl] = await Promise.all([
-          fetchClientPortal(savedQuery),
+        const [verified, tpl] = await Promise.all([
+          fetchVerifiedClientPortal(),
           fetchPublicAutomationTemplates(),
         ]);
+        const portal = verified.portal;
         const now = Date.now();
         const sub = portal.subscription;
         if (sub && sub.status === 'activated' && sub.expires_at) {

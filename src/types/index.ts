@@ -168,6 +168,33 @@ export interface ClientPortalData {
   ads: Ad[];
 }
 
+export interface PortalOtpRequestResult {
+  ok: boolean;
+  maskedPhone: string;
+  clientName?: string | null;
+  deliveryChannel: string;
+  expiresInMinutes: number;
+  message: string;
+  previewOtp?: string;
+}
+
+export interface PortalOtpVerifyResult {
+  ok: boolean;
+  portalToken: string;
+  expiresAt: string;
+  maskedPhone: string;
+  portal: ClientPortalData;
+}
+
+export interface PendingPortalOtp {
+  id: string;
+  phone_digits: string;
+  manual_otp_code: string | null;
+  delivery_status: 'sent' | 'pending_manual' | 'failed';
+  expires_at: string;
+  created_at: string;
+}
+
 export type WhatsAppProvider = 'ultramsg' | 'meta_cloud' | 'webhook';
 
 export interface AutomationConfig {

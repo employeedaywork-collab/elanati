@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MessageCircle, MessageSquare, Phone, Send, Search, X } from 'lucide-react';
-import { formatWhatsAppLink, supabase } from '../lib/supabase';
+import { formatWhatsAppLink, sanitizePhoneHref, supabase } from '../lib/supabase';
 import {
   createContactTicket,
   fetchTicketByCode,
@@ -448,7 +448,7 @@ export default function SupportWidget({
                 </a>
 
                 <a
-                  href={`tel:${settings.contact_phone}`}
+                  href={`tel:${sanitizePhoneHref(settings.contact_phone)}`}
                   className="flex items-center justify-between p-4 rounded-2xl border border-slate-200 hover:bg-slate-50 text-slate-900 transition-colors"
                 >
                   <div className="flex items-center gap-3">

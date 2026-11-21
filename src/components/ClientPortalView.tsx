@@ -19,6 +19,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { DEFAULT_CATEGORIES } from '../data/seedData';
+import { escapeCsvCell, sanitizePhoneHref } from '../lib/supabase';
 import {
   fetchClientPortal,
   fetchPublicAutomationTemplates,
@@ -221,7 +222,7 @@ export default function ClientPortalView({
         a.expires_at ? formatArabicDate(a.expires_at) : 'دائم',
       ]),
     ];
-    const csv = '\uFEFF' + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = '\uFEFF' + rows.map((r) => r.map((v) => escapeCsvCell(v)).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -586,7 +587,7 @@ export default function ClientPortalView({
                 </p>
                 <div className="flex items-center gap-2 pt-1">
                   <a
-                    href={`tel:${sub?.account_manager_phone || settings.contact_phone}`}
+                    href={`tel:${sanitizePhoneHref(sub?.account_manager_phone || settings.contact_phone)}`}
                     className="px-3 py-1.5 rounded-lg bg-blue-700 text-white text-xs font-bold inline-flex items-center gap-1"
                   >
                     <Phone className="w-3.5 h-3.5" />

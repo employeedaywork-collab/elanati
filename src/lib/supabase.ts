@@ -83,3 +83,49 @@ export function formatWhatsAppLink(phone: string, message?: string): string {
   const base = `https://wa.me/${normalized}`;
   return message ? `${base}?text=${encodeURIComponent(message)}` : base;
 }
+
+export function sanitizeHttpUrl(raw?: string | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function sanitizePhoneHref(phone?: string | null): string {
+  if (!phone || typeof phone !== 'string') return '';
+  const cleaned = phone.trim().replace(/[^+\d]/g, '');
+  return cleaned.startsWith('+')
+    ? `+${cleaned.slice(1).replace(/\+/g, '')}`
+    : cleaned.replace(/\+/g, '');
+}
+
+export function escapeCsvCell(value: unknown): string {
+  const str = String(value ?? '');
+  const neutralized = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+  return `"${neutralized.replace(/"/g, '""')}"`;
+}
+
+export function isPreviewAuthAllowed(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname.toLowerCase();
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.run.app') ||
+    host.endsWith('.webcontainer.io') ||
+    host.endsWith('.googleusercontent.com') ||
+    host.endsWith('.aistudio.google.com')
+  );
+}
+

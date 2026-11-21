@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Edit3, PlusCircle, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Edit3, KeyRound, PlusCircle, X } from 'lucide-react';
 import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../data/seedData';
-import { editAdByClient } from '../services/dataService';
+import { editAdByClient, getSavedAdPin } from '../services/dataService';
 import { Ad, AdCategory } from '../types';
 
 const CUSTOM_CATEGORY_VALUE = '__custom__';
@@ -22,6 +22,19 @@ export default function ClientEditAdModal({
   onSaved,
 }: ClientEditAdModalProps) {
   const initialInList = categories.includes(ad.category);
+  const [verifyCode, setVerifyCode] = useState(() => {
+    const savedPin = getSavedAdPin(ad.id);
+    if (savedPin) return savedPin;
+    const qUpper = ownerQuery.trim().toUpperCase();
+    if (qUpper.startsWith('SUB-') && !qUpper.includes('*')) return qUpper;
+    try {
+      const lastSub = (localStorage.getItem('elanati_last_sub_code') || '').trim().toUpperCase();
+      if (lastSub) return lastSub;
+    } catch {
+      // ignore
+    }
+    return '';
+  });
   const [form, setForm] = useState({
     title: ad.title,
     category: (initialInList ? ad.category : ad.category) as AdCategory,
@@ -53,11 +66,16 @@ export default function ClientEditAdModal({
       return;
     }
 
+    if (verifyCode.trim().length < 5) {
+      setError('يرجى إدخال كود تعديل الإعلان أو كود الاشتراك للتحقق من الملكية');
+      return;
+    }
+
     setSaving(true);
     try {
       const updated = await editAdByClient({
         adId: ad.id,
-        ownerQuery,
+        ownerQuery: verifyCode.trim(),
         title: form.title,
         category: resolvedCategory,
         city: form.city,
@@ -122,6 +140,22 @@ export default function ClientEditAdModal({
                 {error}
               </div>
             )}
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-blue-700" />
+                كود تعديل الإعلان أو كود الاشتراك (للتحقق من الملكية) *
+              </label>
+              <input
+                type="text"
+                required
+                value={verifyCode}
+                onChange={(e) => setVerifyCode(e.target.value)}
+                placeholder="مثال: A4F9C21B أو SUB-12345"
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-mono text-left outline-none focus:ring-2 focus:ring-blue-600"
+                dir="ltr"
+              />
+            </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">أيقونة الإعلان</label>

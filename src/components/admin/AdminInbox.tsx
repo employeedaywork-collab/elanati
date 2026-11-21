@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Mail, MessageCircle, Phone, Search, Send } from 'lucide-react';
-import { formatWhatsAppLink, supabase } from '../../lib/supabase';
+import { formatWhatsAppLink, sanitizePhoneHref, supabase } from '../../lib/supabase';
 import {
   fetchTicketMessagesAdmin,
   postSupportMessage,
@@ -244,7 +244,7 @@ export default function AdminInbox({
                       واتساب
                     </a>
                     <a
-                      href={`tel:${selectedTicket.phone}`}
+                      href={`tel:${sanitizePhoneHref(selectedTicket.phone)}`}
                       className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5"
                     >
                       <Phone className="w-3.5 h-3.5" />

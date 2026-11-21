@@ -13,7 +13,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { formatWhatsAppLink } from '../../lib/supabase';
+import { escapeCsvCell, formatWhatsAppLink } from '../../lib/supabase';
 import {
   activateSubscriptionAdmin,
   extendSubscriptionAdmin,
@@ -204,7 +204,7 @@ export default function AdminPackagesManager({
         r.admin_note || '-',
       ]),
     ];
-    const csv = '\uFEFF' + rows.map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = '\uFEFF' + rows.map((row) => row.map((v) => escapeCsvCell(v)).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

@@ -25,6 +25,7 @@ export interface Ad {
   banner_url?: string | null;
   package_name?: string;
   subscription_code?: string | null;
+  owner_pin?: string | null;
   priority_rank?: number;
   status: AdStatus;
   featured: boolean;

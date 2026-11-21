@@ -188,7 +188,7 @@ export default function HomePage() {
     extra_images?: string[];
     banner_url?: string;
     subscription_code?: string;
-  }): Promise<{ requiresReview: boolean }> => {
+  }): Promise<{ requiresReview: boolean; ownerPin: string }> => {
     const result = await createAd({
       ...input,
       requireApproval: settings.require_ad_approval,
@@ -201,7 +201,10 @@ export default function HomePage() {
       const refreshed = await fetchPublicAds();
       setAds(refreshed);
     }
-    return { requiresReview: result.requiresReview };
+    return {
+      requiresReview: result.requiresReview,
+      ownerPin: result.ad.owner_pin || '',
+    };
   };
 
   const handleViewAd = (ad: Ad) => {

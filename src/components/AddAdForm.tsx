@@ -21,7 +21,7 @@ interface AddAdFormProps {
     extra_images?: string[];
     banner_url?: string;
     subscription_code?: string;
-  }) => Promise<{ requiresReview: boolean }>;
+  }) => Promise<{ requiresReview: boolean; ownerPin?: string }>;
   onClose: () => void;
   onUpgrade: () => void;
   onOpenPortal: (query: string) => void;
@@ -65,7 +65,12 @@ export default function AddAdForm({
   const [allowance, setAllowance] = useState<AdAllowance | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [doneState, setDoneState] = useState<{ requiresReview: boolean; phone: string } | null>(null);
+  const [doneState, setDoneState] = useState<{
+    requiresReview: boolean;
+    phone: string;
+    ownerPin?: string;
+  } | null>(null);
+  const [copiedPin, setCopiedPin] = useState(false);
 
   const emojis = ['📦', '💻', '👔', '💄', '🪑', '🏗️', '🍕', '🚗', '📱', '🏠', '💊', '🎁'];
 
@@ -132,7 +137,11 @@ export default function AddAdForm({
       } catch {
         // ignore
       }
-      setDoneState({ requiresReview: result.requiresReview, phone: formData.contact.trim() });
+      setDoneState({
+        requiresReview: result.requiresReview,
+        phone: formData.contact.trim(),
+        ownerPin: result.ownerPin,
+      });
     } catch (err: any) {
       setError(err?.message || 'حدث خطأ أثناء إرسال الإعلان، حاول مرة أخرى');
     } finally {
@@ -167,6 +176,29 @@ export default function AddAdForm({
                 ? `تم إرسال إعلانك للمراجعة وسيتم اعتماده ونشره للزوار خلال دقائق. الإعلانات المجانية تظهر لمدة ${settings.free_ad_days || 7} أيام وتختفي تلقائياً بعد انتهاء المدة.`
                 : 'إعلانك ظاهر الآن في قائمة الإعلانات المتاحة لجميع الموزعين والتجار.'}
             </p>
+            {doneState.ownerPin && (
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-center">
+                <p className="text-xs font-bold text-slate-700">
+                  كود الحماية الخاص بتعديل الإعلان (احتفظ به — لا يظهر للعامة):
+                </p>
+                <div className="flex items-center justify-center gap-2">
+                  <span className="font-mono text-base font-extrabold text-blue-700 tracking-wider bg-white border border-slate-200 px-3 py-1 rounded-xl">
+                    {doneState.ownerPin}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(doneState.ownerPin || '');
+                      setCopiedPin(true);
+                      setTimeout(() => setCopiedPin(false), 2000);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold"
+                  >
+                    {copiedPin ? 'تم النسخ' : 'نسخ'}
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="space-y-2.5 pt-2">
               <button
                 type="button"

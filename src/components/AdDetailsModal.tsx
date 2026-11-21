@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Calendar, Check, Clock, Copy, Crown, Eye, MapPin, MessageCircle, Phone, Send, Star, X } from 'lucide-react';
-import { formatWhatsAppLink } from '../lib/supabase';
+import { formatWhatsAppLink, sanitizeHttpUrl, sanitizePhoneHref } from '../lib/supabase';
 import { getRemainingDays } from '../services/dataService';
 import { Ad } from '../types';
 
@@ -13,9 +13,9 @@ interface AdDetailsModalProps {
 export default function AdDetailsModal({ ad, onClose, onInquireAdmin }: AdDetailsModalProps) {
   const [copied, setCopied] = useState(false);
 
-  const galleryImages = [ad.image_url, ad.banner_url, ...(ad.extra_images || [])].filter(
-    (url, index, arr): url is string => Boolean(url) && arr.indexOf(url) === index
-  );
+  const galleryImages = [ad.image_url, ad.banner_url, ...(ad.extra_images || [])]
+    .map((url) => sanitizeHttpUrl(url))
+    .filter((url, index, arr): url is string => Boolean(url) && arr.indexOf(url) === index);
   const [activeImgIndex, setActiveImgIndex] = useState(0);
   const remainingDays = getRemainingDays(ad.expires_at);
 
@@ -170,7 +170,7 @@ export default function AdDetailsModal({ ad, onClose, onInquireAdmin }: AdDetail
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <a
-                href={`tel:${ad.contact}`}
+                href={`tel:${sanitizePhoneHref(ad.contact)}`}
                 className="flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-800 text-white py-3.5 px-5 rounded-xl font-bold text-sm transition-colors"
               >
                 <Phone className="w-4 h-4" />

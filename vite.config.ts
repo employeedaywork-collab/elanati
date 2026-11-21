@@ -7,6 +7,9 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
+    build: {
+      sourcemap: false,
+    },
     plugins: [
       react(),
       tailwindcss(),

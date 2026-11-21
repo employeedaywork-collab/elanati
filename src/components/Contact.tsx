@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle2, Copy, Mail, MapPin, MessageCircle, Phone } from 'lucide-react';
-import { formatWhatsAppLink } from '../lib/supabase';
+import { formatWhatsAppLink, sanitizePhoneHref } from '../lib/supabase';
 import { createContactTicket } from '../services/dataService';
 import { SiteSettings } from '../types';
 
@@ -88,7 +88,7 @@ export default function Contact({ settings, onTicketCreated }: ContactProps) {
               </a>
 
               <a
-                href={`tel:${settings.contact_phone}`}
+                href={`tel:${sanitizePhoneHref(settings.contact_phone)}`}
                 className="flex items-center gap-4 p-4 rounded-2xl border border-slate-200 hover:border-blue-300 transition-colors"
               >
                 <div className="w-11 h-11 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-center shrink-0">

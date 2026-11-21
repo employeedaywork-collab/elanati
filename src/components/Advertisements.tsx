@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Clock, Crown, Image as ImageIcon, Search, Star } from 'lucide-react';
 import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../data/seedData';
+import { sanitizeHttpUrl } from '../lib/supabase';
 import { getRemainingDays } from '../services/dataService';
 import { Ad, AdCategory } from '../types';
 
@@ -84,19 +85,22 @@ export default function Advertisements({
                   }}
                   className="cursor-pointer rounded-2xl bg-slate-900 text-white border border-blue-500/40 overflow-hidden shadow-md hover:shadow-lg transition-all flex flex-col sm:flex-row"
                 >
-                  {ad.banner_url && (
-                    <div className="sm:w-44 h-36 sm:h-auto shrink-0 bg-slate-800">
-                      <img
-                        src={ad.banner_url}
-                        alt={ad.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                    </div>
-                  )}
+                  {(() => {
+                    const safeBanner = sanitizeHttpUrl(ad.banner_url);
+                    return safeBanner ? (
+                      <div className="sm:w-44 h-36 sm:h-auto shrink-0 bg-slate-800">
+                        <img
+                          src={safeBanner}
+                          alt={ad.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    ) : null;
+                  })()}
                   <div className="p-5 flex-1 flex flex-col justify-between gap-3">
                     <div>
                       <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -194,24 +198,27 @@ export default function Advertisements({
                   }`}
                 >
                   <div className="p-6">
-                    {ad.image_url ? (
-                      <div className="relative mb-4 h-40 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
-                        <img
-                          src={ad.image_url}
-                          alt={ad.title}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).style.display = 'none';
-                          }}
-                        />
-                        {extraCount > 0 && (
-                          <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900/80 text-white text-[11px] font-bold">
-                            <ImageIcon className="w-3 h-3" />+{extraCount} صور
-                          </span>
-                        )}
-                      </div>
-                    ) : null}
+                    {(() => {
+                      const safeThumb = sanitizeHttpUrl(ad.image_url);
+                      return safeThumb ? (
+                        <div className="relative mb-4 h-40 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
+                          <img
+                            src={safeThumb}
+                            alt={ad.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                          {extraCount > 0 && (
+                            <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900/80 text-white text-[11px] font-bold">
+                              <ImageIcon className="w-3 h-3" />+{extraCount} صور
+                            </span>
+                          )}
+                        </div>
+                      ) : null;
+                    })()}
 
                     <div className="flex items-start justify-between gap-2 mb-3">
                       <span className="text-3xl leading-none" aria-hidden="true">

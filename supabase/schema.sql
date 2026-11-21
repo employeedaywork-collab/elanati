@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS public.elanati_ads (
   banner_url text,
   package_name text NOT NULL DEFAULT 'مجاني',
   subscription_code text,
+  owner_pin text,
   priority_rank integer NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'archived')),
   featured boolean NOT NULL DEFAULT false,
@@ -65,11 +66,16 @@ ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS client_name text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS extra_images jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS banner_url text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS subscription_code text;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS owner_pin text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS priority_rank integer NOT NULL DEFAULT 0;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS client_edits_count integer NOT NULL DEFAULT 0;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS last_client_edited_at timestamptz;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS starts_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+
+UPDATE public.elanati_ads
+SET owner_pin = upper(encode(gen_random_bytes(4), 'hex'))
+WHERE owner_pin IS NULL OR length(trim(owner_pin)) < 6;
 
 -- إزالة قيد التصنيفات الثابت إن وجد سابقاً للسماح بإضافة تصنيفات جديدة ديناميكياً
 DO $$
@@ -266,7 +272,12 @@ CREATE POLICY "Public can submit new ads"
   ON public.elanati_ads FOR INSERT
   WITH CHECK (
     public.is_elanati_admin()
-    OR status IN ('pending', 'approved')
+    OR (
+      status IN ('pending', 'approved')
+      AND views_count = 0
+      AND client_edits_count = 0
+      AND admin_note IS NULL
+    )
   );
 
 DROP POLICY IF EXISTS "Admins can update ads" ON public.elanati_ads;
@@ -285,7 +296,14 @@ CREATE POLICY "Admins can delete ads"
 DROP POLICY IF EXISTS "Public can create contact tickets" ON public.elanati_contact_messages;
 CREATE POLICY "Public can create contact tickets"
   ON public.elanati_contact_messages FOR INSERT
-  WITH CHECK (true);
+  WITH CHECK (
+    public.is_elanati_admin()
+    OR (
+      status = 'new'
+      AND admin_reply IS NULL
+      AND replied_at IS NULL
+    )
+  );
 
 DROP POLICY IF EXISTS "Admins can manage contact tickets" ON public.elanati_contact_messages;
 CREATE POLICY "Admins can manage contact tickets"
@@ -297,7 +315,10 @@ CREATE POLICY "Admins can manage contact tickets"
 DROP POLICY IF EXISTS "Clients can append messages to tickets" ON public.elanati_support_messages;
 CREATE POLICY "Clients can append messages to tickets"
   ON public.elanati_support_messages FOR INSERT
-  WITH CHECK (sender_role = 'client' OR public.is_elanati_admin());
+  WITH CHECK (
+    (sender_role = 'client' AND length(trim(body)) BETWEEN 1 AND 2000)
+    OR public.is_elanati_admin()
+  );
 
 DROP POLICY IF EXISTS "Admins can manage support messages" ON public.elanati_support_messages;
 CREATE POLICY "Admins can manage support messages"
@@ -309,7 +330,16 @@ CREATE POLICY "Admins can manage support messages"
 DROP POLICY IF EXISTS "Public can submit package requests" ON public.elanati_package_requests;
 CREATE POLICY "Public can submit package requests"
   ON public.elanati_package_requests FOR INSERT
-  WITH CHECK (true);
+  WITH CHECK (
+    public.is_elanati_admin()
+    OR (
+      status = 'pending'
+      AND starts_at IS NULL
+      AND expires_at IS NULL
+      AND api_key IS NULL
+      AND admin_note IS NULL
+    )
+  );
 
 DROP POLICY IF EXISTS "Admins can manage package requests" ON public.elanati_package_requests;
 CREATE POLICY "Admins can manage package requests"
@@ -428,7 +458,7 @@ AS $$
   ORDER BY sm.created_at ASC;
 $$;
 
--- بوابة العميل: الاستعلام برقم الهاتف أو كود الاشتراك لمعرفة تاريخ البداية والنهاية والعداد التنازلي وسجل الدفعات وإعلاناته
+-- بوابة العميل: الاستعلام برقم الهاتف أو كود الاشتراك مع إخفاء البيانات الحساسة عند البحث بالهاتف العام فقط
 CREATE OR REPLACE FUNCTION public.get_elanati_client_portal(p_query text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -441,6 +471,7 @@ DECLARE
   v_digits text := regexp_replace(v_clean, '\D', '', 'g');
   v_sub record;
   v_phone text := NULL;
+  v_by_code boolean := false;
   v_ads jsonb;
   v_payments jsonb;
 BEGIN
@@ -461,6 +492,7 @@ BEGIN
 
   IF v_sub.id IS NOT NULL THEN
     v_phone := regexp_replace(v_sub.client_phone, '\D', '', 'g');
+    v_by_code := (v_sub.subscription_code IS NOT NULL AND upper(trim(v_sub.subscription_code)) = upper(v_clean));
   ELSE
     v_phone := v_digits;
   END IF;
@@ -469,10 +501,26 @@ BEGIN
   INTO v_payments
   FROM (
     SELECT
-      id, subscription_code, package_name, billing_cycle, price_egp,
-      payment_method, payment_reference, client_name, client_phone,
-      company_name, notes, status, max_ads, starts_at, expires_at,
-      api_key, account_manager_name, account_manager_phone, admin_note, created_at
+      id,
+      CASE
+        WHEN subscription_code IS NULL THEN NULL
+        WHEN v_by_code THEN subscription_code
+        ELSE left(subscription_code, 4) || '***' || right(subscription_code, 2)
+      END AS subscription_code,
+      package_name, billing_cycle, price_egp, payment_method,
+      CASE
+        WHEN payment_reference IS NULL THEN NULL
+        WHEN v_by_code THEN payment_reference
+        WHEN length(payment_reference) > 4 THEN '••••' || right(payment_reference, 4)
+        ELSE 'مسجل'
+      END AS payment_reference,
+      client_name, client_phone, company_name, status, max_ads, starts_at, expires_at,
+      CASE
+        WHEN api_key IS NULL THEN NULL
+        WHEN v_by_code THEN api_key
+        ELSE '••••' || right(api_key, 4)
+      END AS api_key,
+      account_manager_name, account_manager_phone, created_at
     FROM public.elanati_package_requests
     WHERE (subscription_code IS NOT NULL AND upper(trim(subscription_code)) = upper(v_clean))
        OR (v_phone <> '' AND regexp_replace(client_phone, '\D', '', 'g') = v_phone)
@@ -482,12 +530,17 @@ BEGIN
   INTO v_ads
   FROM (
     SELECT
-      id, client_name, title, category, description, contact, city, image, image_url,
-      extra_images, banner_url, package_name, subscription_code, priority_rank,
-      status, featured, views_count, client_edits_count, last_client_edited_at,
-      starts_at, expires_at, created_at
+      id, title, category, description, contact, city, image, image_url,
+      extra_images, banner_url, package_name,
+      CASE
+        WHEN subscription_code IS NULL THEN NULL
+        WHEN v_by_code THEN subscription_code
+        ELSE left(subscription_code, 4) || '***' || right(subscription_code, 2)
+      END AS subscription_code,
+      priority_rank, status, featured, views_count, client_edits_count,
+      last_client_edited_at, starts_at, expires_at, created_at
     FROM public.elanati_ads
-    WHERE (v_sub.subscription_code IS NOT NULL AND upper(COALESCE(subscription_code, '')) = upper(v_sub.subscription_code))
+    WHERE (v_by_code AND v_sub.subscription_code IS NOT NULL AND upper(COALESCE(subscription_code, '')) = upper(v_sub.subscription_code))
        OR (v_phone <> '' AND regexp_replace(contact, '\D', '', 'g') = v_phone)
   ) a;
 
@@ -495,12 +548,23 @@ BEGIN
     'subscription',
     CASE WHEN v_sub.id IS NOT NULL THEN jsonb_build_object(
       'id', v_sub.id,
-      'subscription_code', v_sub.subscription_code,
+      'subscription_code',
+      CASE
+        WHEN v_sub.subscription_code IS NULL THEN NULL
+        WHEN v_by_code THEN v_sub.subscription_code
+        ELSE left(v_sub.subscription_code, 4) || '***' || right(v_sub.subscription_code, 2)
+      END,
       'package_name', v_sub.package_name,
       'billing_cycle', v_sub.billing_cycle,
       'price_egp', v_sub.price_egp,
       'payment_method', v_sub.payment_method,
-      'payment_reference', v_sub.payment_reference,
+      'payment_reference',
+      CASE
+        WHEN v_sub.payment_reference IS NULL THEN NULL
+        WHEN v_by_code THEN v_sub.payment_reference
+        WHEN length(v_sub.payment_reference) > 4 THEN '••••' || right(v_sub.payment_reference, 4)
+        ELSE 'مسجل'
+      END,
       'client_name', v_sub.client_name,
       'client_phone', v_sub.client_phone,
       'company_name', v_sub.company_name,
@@ -508,7 +572,12 @@ BEGIN
       'max_ads', v_sub.max_ads,
       'starts_at', v_sub.starts_at,
       'expires_at', v_sub.expires_at,
-      'api_key', v_sub.api_key,
+      'api_key',
+      CASE
+        WHEN v_sub.api_key IS NULL THEN NULL
+        WHEN v_by_code THEN v_sub.api_key
+        ELSE '••••' || right(v_sub.api_key, 4)
+      END,
       'account_manager_name', v_sub.account_manager_name,
       'account_manager_phone', v_sub.account_manager_phone,
       'created_at', v_sub.created_at
@@ -519,7 +588,7 @@ BEGIN
 END;
 $$;
 
--- تعديل الإعلان بواسطة المعلن (متاح مرة واحدة فقط، وبعدها يكون التعديل عبر الإدارة)
+-- تعديل الإعلان بواسطة المعلن (يتطلب كود الإعلان السري أو كود الاشتراك المدفوع — مرة واحدة فقط)
 CREATE OR REPLACE FUNCTION public.edit_elanati_ad_by_client(
   p_ad_id uuid,
   p_query text,
@@ -536,15 +605,15 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_clean_query text := trim(COALESCE(p_query, ''));
-  v_digits text := regexp_replace(v_clean_query, '\D', '', 'g');
+  v_clean_query text := upper(trim(COALESCE(p_query, '')));
   v_ad public.elanati_ads%ROWTYPE;
   v_updated public.elanati_ads%ROWTYPE;
   v_clean_cat text := regexp_replace(trim(COALESCE(p_category, '')), '\s+', ' ', 'g');
+  v_clean_img text := NULLIF(trim(COALESCE(p_image_url, '')), '');
   v_owns boolean := false;
 BEGIN
-  IF v_clean_query = '' THEN
-    RAISE EXCEPTION 'يرجى التحقق برقم الهاتف أو كود الاشتراك لتعديل الإعلان';
+  IF v_clean_query = '' OR length(v_clean_query) < 5 THEN
+    RAISE EXCEPTION 'يرجى إدخال كود تعديل الإعلان أو كود الاشتراك للتحقق من الملكية';
   END IF;
 
   SELECT *
@@ -558,17 +627,19 @@ BEGIN
   END IF;
 
   v_owns :=
-    (v_digits <> '' AND regexp_replace(v_ad.contact, '\D', '', 'g') = v_digits)
-    OR (v_ad.subscription_code IS NOT NULL AND upper(trim(v_ad.subscription_code)) = upper(v_clean_query))
+    (v_ad.owner_pin IS NOT NULL AND upper(trim(v_ad.owner_pin)) = v_clean_query)
+    OR (v_ad.subscription_code IS NOT NULL AND upper(trim(v_ad.subscription_code)) = v_clean_query)
     OR EXISTS (
       SELECT 1
       FROM public.elanati_package_requests r
-      WHERE (upper(trim(COALESCE(r.subscription_code, ''))) = upper(v_clean_query))
+      WHERE r.status = 'activated'
+        AND r.subscription_code IS NOT NULL
+        AND upper(trim(r.subscription_code)) = v_clean_query
         AND regexp_replace(r.client_phone, '\D', '', 'g') = regexp_replace(v_ad.contact, '\D', '', 'g')
     );
 
   IF NOT v_owns THEN
-    RAISE EXCEPTION 'غير مصرح بتعديل هذا الإعلان بهذا الرقم أو الكود';
+    RAISE EXCEPTION 'كود التحقق غير صحيح أو غير مصرح بتعديل هذا الإعلان';
   END IF;
 
   IF COALESCE(v_ad.client_edits_count, 0) >= 1 THEN
@@ -587,6 +658,9 @@ BEGIN
   IF length(trim(COALESCE(p_description, ''))) < 5 THEN
     RAISE EXCEPTION 'يرجى كتابة وصف واضح للإعلان';
   END IF;
+  IF v_clean_img IS NOT NULL AND v_clean_img !~* '^https?://' THEN
+    RAISE EXCEPTION 'رابط الصورة يجب أن يبدأ بـ https:// أو http://';
+  END IF;
 
   INSERT INTO public.elanati_categories (name, sort_order, is_active)
   VALUES (v_clean_cat, 20, true)
@@ -598,18 +672,39 @@ BEGIN
       city = trim(p_city),
       description = trim(p_description),
       image = COALESCE(NULLIF(trim(COALESCE(p_image, '')), ''), v_ad.image),
-      image_url = NULLIF(trim(COALESCE(p_image_url, '')), ''),
+      image_url = v_clean_img,
       client_edits_count = COALESCE(v_ad.client_edits_count, 0) + 1,
       last_client_edited_at = now(),
       updated_at = now()
   WHERE id = p_ad_id
   RETURNING * INTO v_updated;
 
-  RETURN row_to_json(v_updated)::jsonb;
+  RETURN jsonb_build_object(
+    'id', v_updated.id,
+    'title', v_updated.title,
+    'category', v_updated.category,
+    'description', v_updated.description,
+    'contact', v_updated.contact,
+    'city', v_updated.city,
+    'image', v_updated.image,
+    'image_url', v_updated.image_url,
+    'extra_images', v_updated.extra_images,
+    'banner_url', v_updated.banner_url,
+    'package_name', v_updated.package_name,
+    'priority_rank', v_updated.priority_rank,
+    'status', v_updated.status,
+    'featured', v_updated.featured,
+    'views_count', v_updated.views_count,
+    'client_edits_count', v_updated.client_edits_count,
+    'last_client_edited_at', v_updated.last_client_edited_at,
+    'starts_at', v_updated.starts_at,
+    'expires_at', v_updated.expires_at,
+    'created_at', v_updated.created_at
+  );
 END;
 $$;
 
--- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد (المجاني مرة واحدة فقط لكل رقم موبايل أو اسم معلن)
+-- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد (الباقة المدفوعة تتطلب كود الاشتراك والمجانية مرة واحدة فقط)
 DROP FUNCTION IF EXISTS public.check_elanati_ad_allowance(text, text);
 DROP FUNCTION IF EXISTS public.check_elanati_ad_allowance(text, text, text);
 
@@ -643,29 +738,27 @@ BEGIN
   v_free_days := COALESCE(v_free_days, 7);
   v_pro_days := COALESCE(v_pro_days, 30);
 
-  SELECT *
-  INTO v_sub
-  FROM public.elanati_package_requests r
-  WHERE r.status = 'activated'
-    AND (r.expires_at IS NULL OR r.expires_at > now())
-    AND (
-      (v_code <> '' AND upper(COALESCE(r.subscription_code, '')) = v_code)
-      OR (v_digits <> '' AND regexp_replace(r.client_phone, '\D', '', 'g') = v_digits)
-    )
-  ORDER BY r.created_at DESC
-  LIMIT 1;
-
-  SELECT COUNT(*)
-  INTO v_active_ads
-  FROM public.elanati_ads a
-  WHERE a.status IN ('approved', 'pending')
-    AND (a.expires_at IS NULL OR a.expires_at > now())
-    AND (
-      (v_sub.subscription_code IS NOT NULL AND upper(COALESCE(a.subscription_code, '')) = upper(v_sub.subscription_code))
-      OR (v_digits <> '' AND regexp_replace(a.contact, '\D', '', 'g') = v_digits)
-    );
+  IF v_code <> '' THEN
+    SELECT *
+    INTO v_sub
+    FROM public.elanati_package_requests r
+    WHERE r.status = 'activated'
+      AND (r.expires_at IS NULL OR r.expires_at > now())
+      AND r.subscription_code IS NOT NULL
+      AND upper(trim(r.subscription_code)) = v_code
+      AND (v_digits = '' OR regexp_replace(r.client_phone, '\D', '', 'g') = v_digits)
+    ORDER BY r.created_at DESC
+    LIMIT 1;
+  END IF;
 
   IF v_sub.id IS NOT NULL THEN
+    SELECT COUNT(*)
+    INTO v_active_ads
+    FROM public.elanati_ads a
+    WHERE a.status IN ('approved', 'pending')
+      AND (a.expires_at IS NULL OR a.expires_at > now())
+      AND upper(COALESCE(a.subscription_code, '')) = upper(v_sub.subscription_code);
+
     RETURN jsonb_build_object(
       'allowed', v_active_ads < v_sub.max_ads,
       'package_name', v_sub.package_name,
@@ -710,7 +803,7 @@ BEGIN
     'package_name', 'مجاني',
     'subscription_code', NULL,
     'max_ads', 1,
-    'used_ads', CASE WHEN (v_free_used_phone OR v_free_used_name) THEN GREATEST(v_active_ads, 1) ELSE 0 END,
+    'used_ads', CASE WHEN (v_free_used_phone OR v_free_used_name) THEN 1 ELSE 0 END,
     'duration_days', v_free_days,
     'is_permanent', false,
     'featured', false,
@@ -728,8 +821,8 @@ BEGIN
 END;
 $$;
 
--- حماية إضافية على مستوى قاعدة البيانات لمنع تكرار الإعلان المجاني لنفس رقم الموبايل أو اسم المعلن
-CREATE OR REPLACE FUNCTION public.enforce_elanati_single_free_ad()
+-- حماية شاملة على مستوى قاعدة البيانات عند إضافة إعلان جديد (الحالة، الباقة، المدة، الصور، ومنع تكرار المجاني)
+CREATE OR REPLACE FUNCTION public.enforce_elanati_ad_submission()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -738,8 +831,96 @@ AS $$
 DECLARE
   v_digits text := regexp_replace(COALESCE(NEW.contact, ''), '\D', '', 'g');
   v_client_name text := lower(regexp_replace(trim(COALESCE(NEW.client_name, '')), '\s+', ' ', 'g'));
+  v_sub_code text := upper(trim(COALESCE(NEW.subscription_code, '')));
+  v_require_approval boolean := true;
+  v_free_days integer := 7;
+  v_pro_days integer := 30;
+  v_sub record;
+  v_active_ads integer := 0;
+  v_sanitized_extras jsonb := '[]'::jsonb;
+  v_elem text;
 BEGIN
-  IF NEW.package_name = 'مجاني' AND NOT public.is_elanati_admin() THEN
+  IF length(trim(COALESCE(NEW.owner_pin, ''))) < 6 THEN
+    NEW.owner_pin := upper(encode(gen_random_bytes(4), 'hex'));
+  ELSE
+    NEW.owner_pin := upper(trim(NEW.owner_pin));
+  END IF;
+
+  IF NEW.image_url IS NOT NULL AND trim(NEW.image_url) <> '' AND trim(NEW.image_url) !~* '^https?://' THEN
+    NEW.image_url := NULL;
+  END IF;
+
+  IF NEW.banner_url IS NOT NULL AND trim(NEW.banner_url) <> '' AND trim(NEW.banner_url) !~* '^https?://' THEN
+    NEW.banner_url := NULL;
+  END IF;
+
+  IF public.is_elanati_admin() THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT require_ad_approval, free_ad_days, pro_ad_days
+  INTO v_require_approval, v_free_days, v_pro_days
+  FROM public.elanati_site_settings
+  WHERE id = 1;
+
+  NEW.status := CASE WHEN COALESCE(v_require_approval, true) THEN 'pending' ELSE 'approved' END;
+  NEW.views_count := 0;
+  NEW.client_edits_count := 0;
+  NEW.last_client_edited_at := NULL;
+  NEW.admin_note := NULL;
+  NEW.starts_at := now();
+  NEW.created_at := now();
+  NEW.updated_at := now();
+
+  IF v_sub_code <> '' THEN
+    SELECT *
+    INTO v_sub
+    FROM public.elanati_package_requests r
+    WHERE r.status = 'activated'
+      AND r.subscription_code IS NOT NULL
+      AND upper(trim(r.subscription_code)) = v_sub_code
+      AND (r.expires_at IS NULL OR r.expires_at > now())
+      AND regexp_replace(r.client_phone, '\D', '', 'g') = v_digits
+    ORDER BY r.created_at DESC
+    LIMIT 1;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'كود الاشتراك غير صحيح أو غير مفعّل أو غير مرتبط برقم الهاتف';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_active_ads
+    FROM public.elanati_ads a
+    WHERE a.status IN ('approved', 'pending')
+      AND (a.expires_at IS NULL OR a.expires_at > now())
+      AND upper(COALESCE(a.subscription_code, '')) = upper(v_sub.subscription_code);
+
+    IF v_active_ads >= COALESCE(v_sub.max_ads, 10) THEN
+      RAISE EXCEPTION 'تم استهلاك الحد الأقصى للإعلانات المسموح به في باقتك الحالية';
+    END IF;
+
+    NEW.package_name := v_sub.package_name;
+    NEW.subscription_code := v_sub.subscription_code;
+    NEW.featured := true;
+    NEW.priority_rank := CASE WHEN v_sub.package_name = 'المؤسسي' THEN 2 ELSE 1 END;
+    NEW.expires_at := CASE
+      WHEN v_sub.package_name = 'المؤسسي' THEN NULL
+      ELSE COALESCE(v_sub.expires_at, now() + make_interval(days => COALESCE(v_pro_days, 30)))
+    END;
+
+    IF v_sub.package_name <> 'المؤسسي' THEN
+      NEW.banner_url := NULL;
+    END IF;
+
+    IF jsonb_typeof(COALESCE(NEW.extra_images, '[]'::jsonb)) = 'array' THEN
+      FOR v_elem IN SELECT value FROM jsonb_array_elements_text(COALESCE(NEW.extra_images, '[]'::jsonb)) LIMIT 4 LOOP
+        IF trim(v_elem) ~* '^https?://' THEN
+          v_sanitized_extras := v_sanitized_extras || to_jsonb(trim(v_elem));
+        END IF;
+      END LOOP;
+    END IF;
+    NEW.extra_images := v_sanitized_extras;
+  ELSE
     IF v_digits <> '' AND EXISTS (
       SELECT 1
       FROM public.elanati_ads a
@@ -759,6 +940,14 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'اسم المعلن هذا استخدم الإعلان المجاني مسبقاً. الباقة المجانية متاحة لمرة واحدة فقط، يرجى الترقية إلى إحدى الباقات المدفوعة.';
     END IF;
+
+    NEW.package_name := 'مجاني';
+    NEW.subscription_code := NULL;
+    NEW.featured := false;
+    NEW.priority_rank := 0;
+    NEW.extra_images := '[]'::jsonb;
+    NEW.banner_url := NULL;
+    NEW.expires_at := now() + make_interval(days => COALESCE(v_free_days, 7));
   END IF;
 
   RETURN NEW;
@@ -766,10 +955,94 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_elanati_single_free_ad ON public.elanati_ads;
-CREATE TRIGGER trg_elanati_single_free_ad
+DROP TRIGGER IF EXISTS trg_elanati_ad_submission ON public.elanati_ads;
+CREATE TRIGGER trg_elanati_ad_submission
   BEFORE INSERT ON public.elanati_ads
   FOR EACH ROW
-  EXECUTE FUNCTION public.enforce_elanati_single_free_ad();
+  EXECUTE FUNCTION public.enforce_elanati_ad_submission();
+
+-- فرض الحالة المبدئية والأسعار الرسمية على طلبات الباقات من العامة
+CREATE OR REPLACE FUNCTION public.enforce_elanati_package_request_submission()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_pkg record;
+BEGIN
+  IF public.is_elanati_admin() THEN
+    RETURN NEW;
+  END IF;
+
+  NEW.status := 'pending';
+  NEW.starts_at := NULL;
+  NEW.expires_at := NULL;
+  NEW.api_key := NULL;
+  NEW.account_manager_name := NULL;
+  NEW.account_manager_phone := NULL;
+  NEW.admin_note := NULL;
+  NEW.max_ads := CASE WHEN NEW.package_name = 'المؤسسي' THEN 999999 ELSE 10 END;
+
+  SELECT monthly_price, annual_price
+  INTO v_pkg
+  FROM public.elanati_packages
+  WHERE name = NEW.package_name
+    AND is_active = true
+  LIMIT 1;
+
+  IF FOUND THEN
+    NEW.price_egp := CASE
+      WHEN NEW.billing_cycle = 'annual' THEN v_pkg.annual_price * 12
+      ELSE v_pkg.monthly_price
+    END;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_elanati_package_request_submission ON public.elanati_package_requests;
+CREATE TRIGGER trg_elanati_package_request_submission
+  BEFORE INSERT ON public.elanati_package_requests
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_elanati_package_request_submission();
+
+-- ضبط أولوية وحالة تذكرة التواصل من الخادم
+CREATE OR REPLACE FUNCTION public.enforce_elanati_ticket_submission()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_digits text := regexp_replace(COALESCE(NEW.phone, ''), '\D', '', 'g');
+BEGIN
+  IF public.is_elanati_admin() THEN
+    RETURN NEW;
+  END IF;
+
+  NEW.status := 'new';
+  NEW.admin_reply := NULL;
+  NEW.replied_at := NULL;
+  NEW.priority := (
+    v_digits <> '' AND EXISTS (
+      SELECT 1
+      FROM public.elanati_package_requests r
+      WHERE r.status = 'activated'
+        AND (r.expires_at IS NULL OR r.expires_at > now())
+        AND regexp_replace(r.client_phone, '\D', '', 'g') = v_digits
+    )
+  );
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_elanati_ticket_submission ON public.elanati_contact_messages;
+CREATE TRIGGER trg_elanati_ticket_submission
+  BEFORE INSERT ON public.elanati_contact_messages
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_elanati_ticket_submission();
 
 -- ============================================================================
 -- البيانات الأولية (Seed Data)
@@ -1126,7 +1399,14 @@ ON CONFLICT (name) DO NOTHING;
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_ads, public.elanati_categories TO anon, authenticated;
+REVOKE ALL ON public.elanati_ads FROM anon;
+GRANT SELECT (
+  id, title, category, description, contact, whatsapp, city, image,
+  image_url, extra_images, banner_url, package_name, priority_rank,
+  status, featured, views_count, starts_at, expires_at, created_at, updated_at
+) ON public.elanati_ads TO anon;
+GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_categories TO anon, authenticated;
+GRANT SELECT ON public.elanati_ads TO authenticated;
 GRANT INSERT ON public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_categories TO anon, authenticated;
 GRANT ALL ON public.elanati_admins, public.elanati_ads, public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_categories TO authenticated;
 

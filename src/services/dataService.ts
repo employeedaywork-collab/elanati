@@ -6,7 +6,12 @@ import {
   INITIAL_PACKAGES,
   INITIAL_TESTIMONIALS,
 } from '../data/seedData';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import {
+  isPreviewAuthAllowed,
+  isSupabaseConfigured,
+  sanitizeHttpUrl,
+  supabase,
+} from '../lib/supabase';
 import {
   Ad,
   AdAllowance,
@@ -67,6 +72,39 @@ function generateId(prefix: string): string {
     return crypto.randomUUID();
   }
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+}
+
+const AD_PINS_STORAGE_KEY = 'elanati_ad_pins_v1';
+
+export function generateOwnerPin(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(4);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase();
+  }
+  return Math.random().toString(16).slice(2, 10).toUpperCase().padEnd(8, 'A');
+}
+
+export function saveAdPinLocally(adId: string, pin: string): void {
+  if (!adId || !pin) return;
+  try {
+    const existing = readLocal<Record<string, string>>(AD_PINS_STORAGE_KEY, {});
+    existing[adId] = pin;
+    writeLocal(AD_PINS_STORAGE_KEY, existing);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getSavedAdPin(adId: string): string {
+  try {
+    const existing = readLocal<Record<string, string>>(AD_PINS_STORAGE_KEY, {});
+    return existing[adId] || '';
+  } catch {
+    return '';
+  }
 }
 
 export function generateTicketCode(): string {
@@ -376,13 +414,15 @@ export async function checkAdAllowance(
   const normalizedName = normalizeClientName(clientName);
   const cleanCode = (subscriptionCode || '').trim().toUpperCase();
   const requests = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
-  const activeSub = requests.find(
-    (r) =>
-      r.status === 'activated' &&
-      (!r.expires_at || new Date(r.expires_at).getTime() > Date.now()) &&
-      ((cleanCode && (r.subscription_code || '').toUpperCase() === cleanCode) ||
-        (digits && normalizeDigits(r.client_phone) === digits))
-  );
+  const activeSub = cleanCode
+    ? requests.find(
+        (r) =>
+          r.status === 'activated' &&
+          (!r.expires_at || new Date(r.expires_at).getTime() > Date.now()) &&
+          (r.subscription_code || '').toUpperCase() === cleanCode &&
+          (!digits || normalizeDigits(r.client_phone) === digits)
+      )
+    : undefined;
 
   const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   const activeClientAds = ads.filter(
@@ -497,34 +537,70 @@ export async function fetchClientPortal(query: string): Promise<ClientPortalData
       return b.created_at.localeCompare(a.created_at);
     });
 
-  const subscription = matchingReqs[0] || null;
-  const phoneLookup = subscription ? normalizeDigits(subscription.client_phone) : digits;
+  const subscriptionRaw = matchingReqs[0] || null;
+  const byCode = Boolean(
+    subscriptionRaw?.subscription_code && subscriptionRaw.subscription_code.toUpperCase() === upper
+  );
+  const maskSubCode = (code?: string | null) => {
+    if (!code) return null;
+    if (byCode) return code;
+    return `${code.slice(0, 4)}***${code.slice(-2)}`;
+  };
+  const maskSecretTail = (val?: string | null) => {
+    if (!val) return null;
+    if (byCode) return val;
+    return val.length > 4 ? `••••${val.slice(-4)}` : 'مسجل';
+  };
+  const sanitizeReqForPortal = (r: PackageRequest): PackageRequest => ({
+    ...r,
+    subscription_code: maskSubCode(r.subscription_code),
+    payment_reference: maskSecretTail(r.payment_reference),
+    api_key: maskSecretTail(r.api_key),
+    notes: null,
+    admin_note: null,
+  });
+
+  const subscription = subscriptionRaw ? sanitizeReqForPortal(subscriptionRaw) : null;
+  const phoneLookup = subscriptionRaw ? normalizeDigits(subscriptionRaw.client_phone) : digits;
   const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   const clientAds = ads
     .filter(
       (a) =>
-        (subscription?.subscription_code &&
+        (byCode &&
+          subscriptionRaw?.subscription_code &&
           (a.subscription_code || '').toUpperCase() ===
-            subscription.subscription_code.toUpperCase()) ||
+            subscriptionRaw.subscription_code.toUpperCase()) ||
         (phoneLookup && normalizeDigits(a.contact) === phoneLookup)
     )
-    .map(normalizeAdRow)
+    .map((a) => {
+      const normalized = normalizeAdRow(a);
+      const { owner_pin: _pin, admin_note: _note, ...safeAd } = normalized;
+      return {
+        ...safeAd,
+        subscription_code: maskSubCode(normalized.subscription_code),
+      };
+    })
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  const payments = [...matchingReqs].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const payments = [...matchingReqs]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(sanitizeReqForPortal);
   return { subscription, payments, ads: clientAds };
 }
 
 // ============================================================================
 // Advertisements
 // ============================================================================
+const PUBLIC_AD_COLUMNS =
+  'id, title, category, description, contact, whatsapp, city, image, image_url, extra_images, banner_url, package_name, priority_rank, status, featured, views_count, starts_at, expires_at, created_at, updated_at';
+
 export async function fetchPublicAds(): Promise<Ad[]> {
   const nowIso = new Date().toISOString();
 
   if (supabase) {
     const { data, error } = await supabase
       .from('elanati_ads')
-      .select('*')
+      .select(PUBLIC_AD_COLUMNS)
       .eq('status', 'approved')
       .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order('priority_rank', { ascending: false })
@@ -551,6 +627,7 @@ export async function fetchPublicAds(): Promise<Ad[]> {
 
   return archivedSynced
     .filter((ad) => ad.status === 'approved' && !isAdExpired(ad))
+    .map(({ owner_pin: _pin, subscription_code: _code, admin_note: _note, ...publicAd }) => publicAd)
     .sort((a, b) => {
       const rankDiff = (b.priority_rank || 0) - (a.priority_rank || 0);
       if (rankDiff !== 0) return rankDiff;
@@ -660,9 +737,28 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
       : 0
     : allowance?.priority_rank || 0;
 
-  const extraImages = (input.extra_images || []).map((u) => u.trim()).filter(Boolean).slice(0, 4);
-  const bannerUrl =
-    input.asAdmin || allowance?.allow_banner ? input.banner_url?.trim() || null : null;
+  const rawImageUrl = input.image_url?.trim() || '';
+  const safeImageUrl = rawImageUrl ? sanitizeHttpUrl(rawImageUrl) : null;
+  if (rawImageUrl && !safeImageUrl) {
+    throw new Error('رابط الصورة الرئيسية غير صالح، يجب أن يبدأ بـ https:// أو http://');
+  }
+
+  const rawExtraImages = (input.extra_images || []).map((u) => u.trim()).filter(Boolean).slice(0, 4);
+  const extraImages: string[] = [];
+  for (const rawUrl of rawExtraImages) {
+    const safeUrl = sanitizeHttpUrl(rawUrl);
+    if (!safeUrl) {
+      throw new Error('أحد روابط الصور الإضافية غير صالح، يجب أن يبدأ بـ https:// أو http://');
+    }
+    extraImages.push(safeUrl);
+  }
+
+  const rawBannerUrl =
+    input.asAdmin || allowance?.allow_banner ? input.banner_url?.trim() || '' : '';
+  const bannerUrl = rawBannerUrl ? sanitizeHttpUrl(rawBannerUrl) : null;
+  if (rawBannerUrl && !bannerUrl) {
+    throw new Error('رابط البانر الإعلاني غير صالح، يجب أن يبدأ بـ https:// أو http://');
+  }
 
   const requiresReview = input.asAdmin ? false : (input.requireApproval ?? settings.require_ad_approval);
   const status: AdStatus = requiresReview ? 'pending' : 'approved';
@@ -672,8 +768,11 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     throw new Error('يرجى اختيار أو كتابة اسم تصنيف صحيح');
   }
 
+  const ownerPin = generateOwnerPin();
+  const adId = generateId('ad');
+
   const newAd: Ad = {
-    id: generateId('ad'),
+    id: adId,
     client_name: input.client_name?.trim() || null,
     title: input.title.trim(),
     category: cleanCategory,
@@ -682,11 +781,12 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     whatsapp: normalizePhoneToWhatsApp(input.contact.trim()),
     city: input.city.trim(),
     image: input.image || '📦',
-    image_url: input.image_url?.trim() || null,
+    image_url: safeImageUrl,
     extra_images: input.asAdmin || allowance?.allow_extra_images ? extraImages : [],
     banner_url: bannerUrl,
     package_name: effectivePackage,
     subscription_code: allowance?.subscription_code || input.subscription_code || null,
+    owner_pin: ownerPin,
     priority_rank: priorityRank,
     status,
     featured: isFeatured,
@@ -719,6 +819,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
       banner_url: newAd.banner_url,
       package_name: newAd.package_name,
       subscription_code: newAd.subscription_code,
+      owner_pin: ownerPin,
       priority_rank: newAd.priority_rank,
       status: newAd.status,
       featured: newAd.featured,
@@ -727,11 +828,13 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
       expires_at: newAd.expires_at,
     });
     if (error) throw new Error(error.message);
+    saveAdPinLocally(newAd.id, ownerPin);
     return { ad: newAd, requiresReview };
   }
 
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   writeLocal(STORAGE_KEYS.ads, [newAd, ...all]);
+  saveAdPinLocally(newAd.id, ownerPin);
   return { ad: newAd, requiresReview };
 }
 
@@ -745,8 +848,30 @@ export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad>
     }
   }
 
+  const sanitizedPatch: Partial<Ad> = { ...patch };
+  if (patch.image_url !== undefined) {
+    const trimmed = (patch.image_url || '').trim();
+    if (trimmed) {
+      const safe = sanitizeHttpUrl(trimmed);
+      if (!safe) throw new Error('رابط الصورة غير صالح');
+      sanitizedPatch.image_url = safe;
+    } else {
+      sanitizedPatch.image_url = null;
+    }
+  }
+  if (patch.banner_url !== undefined) {
+    const trimmed = (patch.banner_url || '').trim();
+    if (trimmed) {
+      const safe = sanitizeHttpUrl(trimmed);
+      if (!safe) throw new Error('رابط البانر غير صالح');
+      sanitizedPatch.banner_url = safe;
+    } else {
+      sanitizedPatch.banner_url = null;
+    }
+  }
+
   const updatedPatch = {
-    ...patch,
+    ...sanitizedPatch,
     ...(cleanCategory ? { category: cleanCategory } : {}),
     updated_at: new Date().toISOString(),
   };
@@ -791,16 +916,27 @@ export async function editAdByClient(input: {
     throw new Error('يرجى اختيار أو كتابة اسم تصنيف صحيح');
   }
 
+  const rawImage = input.image_url?.trim() || '';
+  const safeImage = rawImage ? sanitizeHttpUrl(rawImage) : null;
+  if (rawImage && !safeImage) {
+    throw new Error('رابط الصورة غير صالح، يجب أن يبدأ بـ https:// أو http://');
+  }
+
+  const verifyCode = input.ownerQuery.trim().toUpperCase();
+  if (verifyCode.length < 5) {
+    throw new Error('يرجى إدخال كود تعديل الإعلان أو كود الاشتراك للتحقق من الملكية');
+  }
+
   if (supabase) {
     const { data, error } = await supabase.rpc('edit_elanati_ad_by_client', {
       p_ad_id: input.adId,
-      p_query: input.ownerQuery.trim(),
+      p_query: verifyCode,
       p_title: input.title.trim(),
       p_category: cleanCat,
       p_city: input.city.trim(),
       p_description: input.description.trim(),
       p_image: input.image || null,
-      p_image_url: input.image_url?.trim() || null,
+      p_image_url: safeImage,
     });
     if (error) throw new Error(error.message);
     return normalizeAdRow(data);
@@ -813,8 +949,7 @@ export async function editAdByClient(input: {
   }
 
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
-  const queryDigits = normalizeDigits(input.ownerQuery);
-  const queryUpper = input.ownerQuery.trim().toUpperCase();
+  const requests = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
   const nowIso = new Date().toISOString();
 
   let updatedAd: Ad | undefined;
@@ -822,11 +957,19 @@ export async function editAdByClient(input: {
     const ad = normalizeAdRow(raw);
     if (ad.id !== input.adId) return ad;
 
+    const adDigits = normalizeDigits(ad.contact);
     const owns =
-      (queryDigits && normalizeDigits(ad.contact) === queryDigits) ||
-      (ad.subscription_code && ad.subscription_code.toUpperCase() === queryUpper);
+      (ad.owner_pin && ad.owner_pin.toUpperCase() === verifyCode) ||
+      (ad.subscription_code && ad.subscription_code.toUpperCase() === verifyCode) ||
+      requests.some(
+        (r) =>
+          r.status === 'activated' &&
+          r.subscription_code &&
+          r.subscription_code.toUpperCase() === verifyCode &&
+          normalizeDigits(r.client_phone) === adDigits
+      );
     if (!owns) {
-      throw new Error('غير مصرح بتعديل هذا الإعلان بهذا الرقم أو الكود');
+      throw new Error('كود التحقق غير صحيح أو غير مصرح بتعديل هذا الإعلان');
     }
     if ((ad.client_edits_count || 0) >= 1) {
       throw new Error(
@@ -841,7 +984,7 @@ export async function editAdByClient(input: {
       city: input.city.trim(),
       description: input.description.trim(),
       image: input.image || ad.image,
-      image_url: input.image_url?.trim() || null,
+      image_url: safeImage,
       client_edits_count: (ad.client_edits_count || 0) + 1,
       last_client_edited_at: nowIso,
       updated_at: nowIso,
@@ -1289,7 +1432,7 @@ export async function activateSubscriptionAdmin(
   const isEnterprise = req.package_name === 'المؤسسي';
   const subCode = req.subscription_code || generateSubscriptionCode();
   const apiKey =
-    req.api_key || (isEnterprise ? `ELN-API-${Math.random().toString(36).slice(2, 10).toUpperCase()}` : null);
+    req.api_key || (isEnterprise ? `ELN-API-${generateOwnerPin()}` : null);
 
   const patch: Partial<PackageRequest> = {
     subscription_code: subCode,
@@ -1553,6 +1696,9 @@ export async function deleteTestimonialAdmin(id: string): Promise<void> {
 // ============================================================================
 export async function getAdminSession(): Promise<AdminSession | null> {
   if (!isSupabaseConfigured || !supabase) {
+    if (!isPreviewAuthAllowed()) {
+      return null;
+    }
     const saved = readLocal<AdminSession | null>(STORAGE_KEYS.previewAdmin, null);
     return saved;
   }
@@ -1580,6 +1726,11 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
   const cleanEmail = email.trim().toLowerCase();
 
   if (!isSupabaseConfigured || !supabase) {
+    if (!isPreviewAuthAllowed()) {
+      throw new Error(
+        'إعدادات الاتصال بقاعدة البيانات غير مكتملة على الخادم. يرجى ضبط متغيرات Supabase قبل تسجيل دخول المدير.'
+      );
+    }
     if (!cleanEmail || password.length < 4) {
       throw new Error('أدخل البريد الإلكتروني وكلمة مرور صالحة');
     }

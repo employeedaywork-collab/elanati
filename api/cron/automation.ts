@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 
 declare const process: { env: Record<string, string | undefined> };
@@ -17,6 +18,67 @@ function getHeader(req: VercelRequestLike, name: string): string {
   const val = req.headers[name.toLowerCase()];
   if (Array.isArray(val)) return val[0] || '';
   return val || '';
+}
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (
+    host === 'localhost' ||
+    host === 'metadata.google.internal' ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    /^\d+$/.test(host)
+  ) {
+    return true;
+  }
+
+  // Block private, loopback, and link-local IPv4 ranges
+  const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [, o1, o2] = ipv4Match.map(Number);
+    if (
+      o1 === 0 ||
+      o1 === 10 ||
+      o1 === 127 ||
+      (o1 === 169 && o2 === 254) ||
+      (o1 === 172 && o2 >= 16 && o2 <= 31) ||
+      (o1 === 192 && o2 === 168) ||
+      (o1 === 100 && o2 >= 64 && o2 <= 127)
+    ) {
+      return true;
+    }
+  }
+
+  // Block loopback, link-local, and unique-local IPv6
+  if (host === '::1' || host === '::' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) {
+    return true;
+  }
+
+  return false;
+}
+
+function assertSafeExternalHttpsUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error('رابط بوابة الواتساب غير صالح');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('يُسمح فقط بروابط HTTPS لبوابة الواتساب');
+  }
+  if (parsed.username || parsed.password || isBlockedHostname(parsed.hostname)) {
+    throw new Error('عنوان بوابة الواتساب غير مسموح به');
+  }
+  return parsed.toString();
 }
 
 function normalizeWhatsAppDigits(phone: string): string {
@@ -60,10 +122,10 @@ async function dispatchWhatsAppMessage(params: {
 
   try {
     if (params.provider === 'meta_cloud') {
-      // endpoint is Phone Number ID or full graph URL
-      const url = endpoint.startsWith('http')
+      const rawUrl = endpoint.startsWith('http')
         ? endpoint
-        : `https://graph.facebook.com/v20.0/${endpoint}/messages`;
+        : `https://graph.facebook.com/v20.0/${encodeURIComponent(endpoint)}/messages`;
+      const url = assertSafeExternalHttpsUrl(rawUrl);
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -77,16 +139,17 @@ async function dispatchWhatsAppMessage(params: {
           type: 'text',
           text: { preview_url: false, body: params.message },
         }),
+        signal: AbortSignal.timeout(10000),
       });
       const text = await res.text();
       return { ok: res.ok, responseText: text.slice(0, 400) };
     }
 
     if (params.provider === 'ultramsg') {
-      // endpoint is instance ID (e.g. instance12345) or full https://api.ultramsg.com/instance.../messages/chat
-      const url = endpoint.startsWith('http')
+      const rawUrl = endpoint.startsWith('http')
         ? endpoint
-        : `https://api.ultramsg.com/${endpoint}/messages/chat`;
+        : `https://api.ultramsg.com/${encodeURIComponent(endpoint)}/messages/chat`;
+      const url = assertSafeExternalHttpsUrl(rawUrl);
       const body = new URLSearchParams({
         token,
         to: `+${to}`,
@@ -96,17 +159,19 @@ async function dispatchWhatsAppMessage(params: {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
+        signal: AbortSignal.timeout(10000),
       });
       const text = await res.text();
       return { ok: res.ok, responseText: text.slice(0, 400) };
     }
 
     // Generic Webhook (n8n / Make.com / Evolution API / Custom Gateway)
+    const safeUrl = assertSafeExternalHttpsUrl(endpoint);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
-    const res = await fetch(endpoint, {
+    const res = await fetch(safeUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -115,6 +180,7 @@ async function dispatchWhatsAppMessage(params: {
         message: params.message,
         ...params.metadata,
       }),
+      signal: AbortSignal.timeout(10000),
     });
     const text = await res.text();
     return { ok: res.ok, responseText: text.slice(0, 400) };
@@ -124,43 +190,47 @@ async function dispatchWhatsAppMessage(params: {
 }
 
 export default async function handler(req: VercelRequestLike, res: VercelResponseLike) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 
-  if (!supabaseUrl || (!serviceKey && !anonKey)) {
+  if (!supabaseUrl || !serviceKey) {
     return res.status(500).json({ error: 'بيانات الاتصال بقاعدة البيانات غير مكتملة على الخادم' });
   }
 
   const authHeader = getHeader(req, 'authorization');
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  const cronSecret = process.env.CRON_SECRET || '';
-  const isVercelCron = Boolean(getHeader(req, 'x-vercel-cron'));
+  const cronSecret = (process.env.CRON_SECRET || '').trim();
 
-  const supabase = createClient(supabaseUrl, serviceKey || anonKey, {
+  const supabase = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Authorization check: allow Vercel Cron (or matching CRON_SECRET), or authenticated Elanati Admin
+  // Strict authorization check: require valid CRON_SECRET bearer token or authenticated Elanati Admin JWT
   let authorized = false;
-  if (cronSecret && bearer === cronSecret) {
+  if (cronSecret && bearer && timingSafeEqualStr(bearer, cronSecret)) {
     authorized = true;
-  } else if (!cronSecret && isVercelCron && req.method === 'GET') {
-    authorized = true;
-  } else if (bearer) {
-    const userClient = createClient(supabaseUrl, anonKey || serviceKey, {
+  } else if (bearer && anonKey) {
+    const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${bearer}` } },
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const { data: userData } = await userClient.auth.getUser(bearer);
     const email = userData?.user?.email;
+    const userId = userData?.user?.id;
     if (email) {
       const { data: adminRow } = await supabase
         .from('elanati_admins')
-        .select('id')
+        .select('id, user_id')
         .ilike('email', email)
         .maybeSingle();
-      if (adminRow) authorized = true;
+      if (adminRow && (!adminRow.user_id || adminRow.user_id === userId)) {
+        authorized = true;
+      }
     }
   }
 
@@ -199,7 +269,7 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
   let failedCount = 0;
   let skippedCount = 0;
 
-  // 2. Archive expired ads automatically (by ad expires_at and linked subscription expiry)
+  // 2. Archive expired ads automatically
   if (config.auto_archive_expired) {
     const { data: rpcCount, error: rpcErr } = await supabase.rpc('archive_expired_elanati_ads');
     if (!rpcErr && typeof rpcCount === 'number') {
@@ -237,10 +307,9 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
         .map((l: any) => `${l.target_type}:${l.target_id}:${l.target_expires_at || ''}`)
     );
 
-    // Fetch all requests to enrich advertiser names by phone if needed
     const { data: allRequests } = await supabase
       .from('elanati_package_requests')
-      .select('*')
+      .select('id, client_name, client_phone, package_name, subscription_code, status, expires_at, created_at')
       .order('created_at', { ascending: false });
 
     const phoneToName = new Map<string, string>();
@@ -251,14 +320,13 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
       }
     }
 
-    // 3a. Free Ads expiring within free_reminder_hours_before (e.g. 48 hours)
     const freeWindowEnd = new Date(
       now.getTime() + config.free_reminder_hours_before * 60 * 60 * 1000
     ).toISOString();
 
     const { data: expiringFreeAds } = await supabase
       .from('elanati_ads')
-      .select('*')
+      .select('id, client_name, title, contact, whatsapp, views_count, expires_at')
       .eq('status', 'approved')
       .eq('package_name', 'مجاني')
       .gt('expires_at', nowIso)
@@ -314,7 +382,6 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
       else failedCount++;
     }
 
-    // 3b. Paid Subscriptions expiring within paid_reminder_days_before (default 7 days / 1 week)
     const paidWindowEnd = new Date(
       now.getTime() + config.paid_reminder_days_before * 24 * 60 * 60 * 1000
     ).toISOString();

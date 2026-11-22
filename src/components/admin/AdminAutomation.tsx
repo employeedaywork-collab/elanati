@@ -126,6 +126,27 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
     }
   };
 
+  const handleClearExternalGateway = async () => {
+    const cleared = {
+      ...config,
+      auto_whatsapp_enabled: false,
+      whatsapp_endpoint: '',
+      whatsapp_token: '',
+    };
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const saved = await updateAutomationConfigAdmin(cleared);
+      setConfig(saved);
+      setFeedback({ type: 'ok', text: 'تم تعطيل الربط الخارجي ومسح بياناته؛ سيعمل النظام بالإرسال اليدوي المباشر مع التنبيه الفوري.' });
+    } catch (err: any) {
+      setConfig(cleared);
+      setFeedback({ type: 'err', text: err?.message || 'تعذر حفظ مسح بيانات الربط' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleArchiveNow = async () => {
     setArchiving(true);
     setFeedback(null);
@@ -834,14 +855,8 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
               {(config.whatsapp_endpoint || config.whatsapp_token || config.auto_whatsapp_enabled) && (
                 <button
                   type="button"
-                  onClick={() =>
-                    setConfig({
-                      ...config,
-                      auto_whatsapp_enabled: false,
-                      whatsapp_endpoint: '',
-                      whatsapp_token: '',
-                    })
-                  }
+                  disabled={saving}
+                  onClick={() => void handleClearExternalGateway()}
                   className="px-4 py-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold"
                 >
                   تعطيل ومسح بيانات الربط

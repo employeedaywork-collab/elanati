@@ -48,11 +48,12 @@ function isBlockedHostname(hostname: string): boolean {
   }
 
   if (
-    host === '::1' ||
-    host === '::' ||
-    host.startsWith('fe80:') ||
-    host.startsWith('fc') ||
-    host.startsWith('fd')
+    host.includes(':') &&
+    (host === '::1' ||
+      host === '::' ||
+      host.startsWith('::ffff:') ||
+      /^fe[89ab][0-9a-f]?:/i.test(host) ||
+      /^f[cd][0-9a-f]{0,2}:/i.test(host))
   ) {
     return true;
   }
@@ -67,7 +68,13 @@ function assertValidPushEndpoint(rawUrl: string): string {
   } catch {
     throw new Error('رابط اشتراك الإشعارات غير صالح');
   }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || isBlockedHostname(parsed.hostname)) {
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.username ||
+    parsed.password ||
+    (parsed.port && parsed.port !== '443') ||
+    isBlockedHostname(parsed.hostname)
+  ) {
     throw new Error('نطاق اشتراك الإشعارات غير مسموح به');
   }
   return parsed.toString();

@@ -327,7 +327,7 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <span className="font-extrabold text-sm text-slate-900 tabular-nums" dir="ltr">
-                        +{otp.phone_digits}
+                        {otp.phone_digits.startsWith('0') ? otp.phone_digits : `+${otp.phone_digits}`}
                       </span>
                       <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 font-mono font-extrabold text-sm tracking-widest">
                         {code}
@@ -356,15 +356,15 @@ export default function AdminAutomation({ onRefresh }: AdminAutomationProps) {
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                     <a
                       href={waUrl}
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => void handleMarkOtpSent(otp, true)}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex-1 sm:flex-initial text-center"
                     >
-                      <Send className="w-3.5 h-3.5" />
+                      <Send className="w-3.5 h-3.5 shrink-0" />
                       إرسال الكود لواتساب العميل مجاناً
                     </a>
                     <button

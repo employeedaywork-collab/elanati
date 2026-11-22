@@ -58,7 +58,14 @@ function isBlockedHostname(hostname: string): boolean {
   }
 
   // Block loopback, link-local, and unique-local IPv6
-  if (host === '::1' || host === '::' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) {
+  if (
+    host.includes(':') &&
+    (host === '::1' ||
+      host === '::' ||
+      host.startsWith('::ffff:') ||
+      /^fe[89ab][0-9a-f]?:/i.test(host) ||
+      /^f[cd][0-9a-f]{0,2}:/i.test(host))
+  ) {
     return true;
   }
 

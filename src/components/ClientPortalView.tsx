@@ -106,6 +106,25 @@ const SUB_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   cancelled: { label: 'ملغي', cls: 'bg-red-50 text-red-700 border border-red-200' },
 };
 
+const PORTAL_REMEMBER_KEY = 'elanati_portal_remember_query';
+
+function readRememberPreference(): boolean {
+  try {
+    return localStorage.getItem(PORTAL_REMEMBER_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function clearSavedInquiryIdentifiers() {
+  try {
+    localStorage.removeItem('elanati_last_client_phone');
+    localStorage.removeItem('elanati_last_sub_code');
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export default function ClientPortalView({
   settings,
   categories = DEFAULT_CATEGORIES,
@@ -117,8 +136,10 @@ export default function ClientPortalView({
   onRequestSupportTicket,
   onAdUpdated,
 }: ClientPortalViewProps) {
+  const [rememberQuery, setRememberQuery] = useState<boolean>(() => readRememberPreference());
   const [query, setQuery] = useState(() => {
     if (initialQuery) return initialQuery;
+    if (!readRememberPreference()) return '';
     try {
       return (
         localStorage.getItem('elanati_last_sub_code') ||
@@ -195,6 +216,46 @@ export default function ClientPortalView({
     }
   }, [initialQuery]);
 
+  const saveInquiryIfRemembered = (rawValue: string) => {
+    const clean = rawValue.trim();
+    if (!rememberQuery || !clean) {
+      clearSavedInquiryIdentifiers();
+      return;
+    }
+    try {
+      if (clean.toUpperCase().startsWith('SUB-')) {
+        localStorage.setItem('elanati_last_sub_code', clean.toUpperCase());
+      } else {
+        localStorage.setItem('elanati_last_client_phone', clean);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const handleToggleRemember = (checked: boolean) => {
+    setRememberQuery(checked);
+    try {
+      localStorage.setItem(PORTAL_REMEMBER_KEY, checked ? 'true' : 'false');
+    } catch {
+      // ignore storage errors
+    }
+    if (!checked) {
+      clearSavedInquiryIdentifiers();
+    } else if (query.trim()) {
+      try {
+        const clean = query.trim();
+        if (clean.toUpperCase().startsWith('SUB-')) {
+          localStorage.setItem('elanati_last_sub_code', clean.toUpperCase());
+        } else {
+          localStorage.setItem('elanati_last_client_phone', clean);
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+  };
+
   const handleRequestOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const clean = query.trim();
@@ -206,6 +267,7 @@ export default function ClientPortalView({
     setErrorMsg('');
     try {
       const result = await requestPortalOtp(clean);
+      saveInquiryIfRemembered(clean);
       setOtpMeta(result);
       setOtpInput('');
       setResendCooldown(60);
@@ -230,6 +292,12 @@ export default function ClientPortalView({
       setVerifiedPhoneLabel(verified.maskedPhone);
       setTemplates(tpl);
       setOtpInput('');
+      if (!rememberQuery) {
+        setQuery('');
+        clearSavedInquiryIdentifiers();
+      } else {
+        saveInquiryIfRemembered(query);
+      }
       setStep('verified');
     } catch (err: any) {
       setErrorMsg(err?.message || 'رمز التحقق غير صحيح');
@@ -245,6 +313,10 @@ export default function ClientPortalView({
     setOtpInput('');
     setVerifiedPhoneLabel('');
     setErrorMsg('');
+    if (!rememberQuery) {
+      setQuery('');
+      clearSavedInquiryIdentifiers();
+    }
     setStep('phone');
   };
 
@@ -346,29 +418,57 @@ export default function ClientPortalView({
             </div>
           )}
 
-          <form onSubmit={(e) => void handleRequestOtp(e)} className="flex flex-col sm:flex-row gap-2.5">
-            <div className="relative flex-1">
-              <Smartphone className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                required
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="أدخل رقم موبايلك المسجل (01xxxxxxxxx) أو كود الاشتراك"
-                className="w-full pr-10 pl-4 py-3.5 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-sm outline-none focus:ring-2 focus:ring-blue-600 tabular-nums"
-              />
+          <form onSubmit={(e) => void handleRequestOtp(e)} className="space-y-3">
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <div className="relative flex-1">
+                <Smartphone className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  required
+                  autoComplete={rememberQuery ? 'on' : 'off'}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="أدخل رقم موبايلك المسجل (01xxxxxxxxx) أو كود الاشتراك"
+                  className="w-full pr-10 pl-4 py-3.5 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-sm outline-none focus:ring-2 focus:ring-blue-600 tabular-nums"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-6 py-3.5 bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white rounded-xl font-bold text-sm shrink-0 transition-colors"
+              >
+                {loading ? 'جاري الإرسال...' : 'إرسال رمز التحقق (OTP)'}
+              </button>
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-6 py-3.5 bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white rounded-xl font-bold text-sm shrink-0 transition-colors"
-            >
-              {loading ? 'جاري الإرسال...' : 'إرسال رمز التحقق (OTP)'}
-            </button>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={rememberQuery}
+                  onChange={(e) => handleToggleRemember(e.target.checked)}
+                  className="w-4 h-4 rounded accent-blue-700 cursor-pointer"
+                />
+                <span>الاحتفاظ برقم الموبايل / الكود على هذا الجهاز لسهولة الاستعلام (اختياري)</span>
+              </label>
+
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery('');
+                    clearSavedInquiryIdentifiers();
+                  }}
+                  className="text-xs font-bold text-red-600 hover:underline"
+                >
+                  حذف الرقم الآن
+                </button>
+              )}
+            </div>
           </form>
 
           <p className="text-[11px] text-slate-500">
-            لا تشارك رمز التحقق مع أي شخص. الجلسة تبقى مفتوحة لك فقط لمدة 30 دقيقة بعد التأكيد.
+            لا تشارك رمز التحقق مع أي شخص. في حال عدم اختيار الاحتفاظ بالرقم، يتم مسحه تلقائياً بعد التحقق ولا يُحفظ على الجهاز.
           </p>
         </div>
       )}
@@ -397,6 +497,10 @@ export default function ClientPortalView({
                 setStep('phone');
                 setErrorMsg('');
                 setOtpInput('');
+                if (!rememberQuery) {
+                  setQuery('');
+                  clearSavedInquiryIdentifiers();
+                }
               }}
               className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-blue-700"
             >

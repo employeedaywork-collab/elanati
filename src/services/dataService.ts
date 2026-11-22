@@ -824,7 +824,7 @@ export async function fetchAllAdsAdmin(): Promise<Ad[]> {
 
     const { data, error } = await supabase
       .from('elanati_ads')
-      .select('*')
+      .select(PUBLIC_AD_COLUMNS)
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
     return (data || []).map(normalizeAdRow);
@@ -1126,7 +1126,7 @@ export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad>
       .from('elanati_ads')
       .update(updatedPatch)
       .eq('id', id)
-      .select()
+      .select(PUBLIC_AD_COLUMNS)
       .single();
     if (error) throw new Error(error.message);
     return normalizeAdRow(data);

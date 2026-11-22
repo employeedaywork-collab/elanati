@@ -2515,9 +2515,16 @@ export async function fetchAdminPushConfig(): Promise<{
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
   });
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+
   const data = await res.json().catch(() => null);
   if (!res.ok || !data?.publicKey) {
-    throw new Error(data?.error || 'تعذر تجهيز إعدادات إشعارات Web Push');
+    throw new Error(
+      data?.error || 'تعذر تجهيز إعدادات إشعارات Web Push (تأكد من تشغيل supabase/schema.sql)'
+    );
   }
   return {
     publicKey: String(data.publicKey),

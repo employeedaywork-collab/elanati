@@ -359,7 +359,13 @@ export default function AdminLayout() {
         'elanati-notif-enabled'
       );
       setPushSubscribed(true);
-      setPushFeedback({ type: 'ok', text: 'تم تفعيل الإشعارات بنجاح.' });
+      setPushFeedback({
+        type: 'ok',
+        text:
+          session && !session.isPreviewMode
+            ? 'تم تفعيل إشعارات المتصفح لهذا الجهاز (لتفعيل إشعارات الخلفية Web Push بعد إغلاق المتصفح تأكد من رفع آخر تحديث إلى GitHub/Vercel).'
+            : 'تم تفعيل الإشعارات المحلية على وضع المعاينة.',
+      });
     } catch (err: any) {
       setPushFeedback({
         type: 'err',

@@ -1,6 +1,10 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import webpush from 'web-push';
+import * as webpushModule from 'web-push';
+
+const webpush = (
+  (webpushModule as unknown as { default?: typeof webpushModule }).default || webpushModule
+) as typeof webpushModule;
 
 declare const process: { env: Record<string, string | undefined> };
 

@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
-import webpush from 'web-push';
+import * as webpushModule from 'web-push';
+
+const webpush = (
+  (webpushModule as unknown as { default?: typeof webpushModule }).default || webpushModule
+) as typeof webpushModule;
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -87,12 +91,22 @@ async function verifyAdminCaller(supabase: any, req: VercelRequestLike): Promise
   }
 
   const email = user.email.trim().toLowerCase();
-  const { data: adminRow } = await supabase
+  let { data: adminRow } = await supabase
     .from('elanati_admins')
     .select('id, email, user_id')
-    .or(`user_id.eq.${user.id},email.ilike.${email}`)
+    .eq('user_id', user.id)
     .limit(1)
     .maybeSingle();
+
+  if (!adminRow) {
+    const byEmail = await supabase
+      .from('elanati_admins')
+      .select('id, email, user_id')
+      .ilike('email', email)
+      .limit(1)
+      .maybeSingle();
+    adminRow = byEmail.data;
+  }
 
   if (!adminRow) return null;
   if (adminRow.user_id && adminRow.user_id !== user.id) return null;

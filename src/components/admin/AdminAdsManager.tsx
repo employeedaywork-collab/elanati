@@ -36,6 +36,7 @@ export default function AdminAdsManager({
   const [editCustomCategory, setEditCustomCategory] = useState('');
   const [creatingNew, setCreatingNew] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [newAdForm, setNewAdForm] = useState({
     client_name: '',
@@ -73,9 +74,12 @@ export default function AdminAdsManager({
 
   const handleStatusChange = async (id: string, status: AdStatus) => {
     setBusyId(id);
+    setActionError(null);
     try {
       await updateAdAdmin(id, { status });
       await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || 'تعذر تحديث حالة الإعلان');
     } finally {
       setBusyId(null);
     }
@@ -83,9 +87,12 @@ export default function AdminAdsManager({
 
   const handleToggleFeatured = async (ad: Ad) => {
     setBusyId(ad.id);
+    setActionError(null);
     try {
       await updateAdAdmin(ad.id, { featured: !ad.featured });
       await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || 'تعذر تحديث تمييز الإعلان');
     } finally {
       setBusyId(null);
     }
@@ -93,6 +100,7 @@ export default function AdminAdsManager({
 
   const handleQuickExtend = async (ad: Ad, days: number | null) => {
     setBusyId(ad.id);
+    setActionError(null);
     try {
       const now = new Date();
       const nextExpiry =
@@ -103,6 +111,8 @@ export default function AdminAdsManager({
         expires_at: nextExpiry,
       });
       await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || 'تعذر تمديد مدة الإعلان');
     } finally {
       setBusyId(null);
     }
@@ -110,9 +120,12 @@ export default function AdminAdsManager({
 
   const handleDelete = async (id: string) => {
     setBusyId(id);
+    setActionError(null);
     try {
       await deleteAdAdmin(id);
       await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || 'تعذر حذف الإعلان');
     } finally {
       setBusyId(null);
     }
@@ -128,6 +141,7 @@ export default function AdminAdsManager({
     if (resolvedCategory.length < 2) return;
 
     setBusyId(editingAd.id);
+    setActionError(null);
     try {
       const priorityRank =
         editingAd.package_name === 'المؤسسي'
@@ -154,6 +168,8 @@ export default function AdminAdsManager({
       setEditingAd(null);
       setEditCustomCategory('');
       await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || 'تعذر حفظ تعديلات الإعلان');
     } finally {
       setBusyId(null);
     }
@@ -168,6 +184,7 @@ export default function AdminAdsManager({
     if (resolvedCategory.length < 2) return;
 
     setBusyId('new');
+    setActionError(null);
     try {
       const { custom_category: _unused, ...rest } = newAdForm;
       await createAd({
@@ -193,6 +210,8 @@ export default function AdminAdsManager({
         featured: false,
       });
       await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || 'تعذر نشر الإعلان');
     } finally {
       setBusyId(null);
     }
@@ -211,6 +230,14 @@ export default function AdminAdsManager({
 
   return (
     <div className="space-y-5">
+      {actionError && (
+        <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center justify-between gap-3">
+          <span>{actionError}</span>
+          <button type="button" onClick={() => setActionError(null)} className="underline shrink-0">
+            إغلاق
+          </button>
+        </div>
+      )}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
         <div className="flex flex-col sm:flex-row gap-3 flex-1">
           <div className="relative flex-1 max-w-md">

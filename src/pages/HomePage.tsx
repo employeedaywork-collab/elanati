@@ -11,14 +11,14 @@ import { fetchTestimonials } from '../services/dataService';
 import { Testimonial } from '../types';
 
 export default function HomePage() {
-  const { settings, ads, loadingAds, onAddAd, onViewAd } = usePublicContext();
+  const { settings, ads, loadingAds, refreshTick, onAddAd, onViewAd } = usePublicContext();
   const [testimonials, setTestimonials] = useState<Testimonial[]>(INITIAL_TESTIMONIALS);
 
   useEffect(() => {
     void fetchTestimonials(false)
       .then((items) => setTestimonials(items))
       .catch(() => undefined);
-  }, []);
+  }, [refreshTick]);
 
   const topAds = ads.slice(0, 3);
 

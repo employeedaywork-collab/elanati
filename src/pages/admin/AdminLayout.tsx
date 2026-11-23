@@ -35,6 +35,7 @@ import {
   sendTestAdminWebPush,
   signOutAdmin,
   subscribeAdminWebPush,
+  subscribeToPlatformDataChanged,
 } from '../../services/dataService';
 import { AdminSession, PendingPortalOtp, SiteSettings } from '../../types';
 
@@ -153,6 +154,8 @@ export default function AdminLayout() {
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const lastShellRefreshAtRef = useRef(0);
+  const shellRefreshTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
@@ -264,11 +267,22 @@ export default function AdminLayout() {
       });
       setPendingOtpItems(otpItems);
       notifyNewOtpRequests(otpItems);
+      lastShellRefreshAtRef.current = Date.now();
       setRefreshTick((t) => t + 1);
     } finally {
       setRefreshing(false);
     }
   }, [notifyNewOtpRequests, session]);
+
+  const scheduleShellRefresh = useCallback(() => {
+    if (shellRefreshTimerRef.current !== null) {
+      window.clearTimeout(shellRefreshTimerRef.current);
+    }
+    shellRefreshTimerRef.current = window.setTimeout(() => {
+      shellRefreshTimerRef.current = null;
+      void refreshShell();
+    }, 250);
+  }, [refreshShell]);
 
   useEffect(() => {
     const defaultTitle = `${settings.site_name || 'إعلاناتي'} — لوحة تحكم المدير`;
@@ -443,8 +457,22 @@ export default function AdminLayout() {
     if (!session) return;
     void refreshShell();
 
+    const unsubscribeSync = subscribeToPlatformDataChanged(() => {
+      scheduleShellRefresh();
+    });
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastShellRefreshAtRef.current > 2000) {
+        scheduleShellRefresh();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
     // Polling fallback every 15s so OTP alerts trigger reliably even without WebSocket/Realtime
-    const pollTimer = setInterval(() => {
+    const pollTimer = window.setInterval(() => {
       void Promise.all([fetchAdminBadgeCounts(), fetchPendingPortalOtpsAdmin()]).then(
         ([counts, otpItems]) => {
           setBadges({
@@ -458,59 +486,98 @@ export default function AdminLayout() {
     }, 15000);
 
     const client = supabase;
-    if (client) {
-      const channel = client
-        .channel('elanati-admin-badges-live')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
-          void refreshShell();
-        })
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'elanati_contact_messages' },
-          () => {
-            void refreshShell();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'elanati_package_requests' },
-          () => {
-            void refreshShell();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'elanati_portal_otps' },
-          () => {
-            void refreshShell();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'elanati_access_logs' },
-          () => {
-            void refreshShell();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'elanati_ad_reports' },
-          () => {
-            void refreshShell();
-          }
-        )
-        .subscribe();
-
-      return () => {
-        clearInterval(pollTimer);
-        void client.removeChannel(channel);
-      };
-    }
+    const channel = client
+      ? client
+          .channel('elanati-admin-badges-live')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
+            scheduleShellRefresh();
+          })
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_contact_messages' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_support_messages' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_package_requests' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_portal_otps' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_access_logs' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_ad_reports' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_site_settings' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_packages' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_testimonials' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_categories' },
+            () => {
+              scheduleShellRefresh();
+            }
+          )
+          .subscribe()
+      : null;
 
     return () => {
-      clearInterval(pollTimer);
+      unsubscribeSync();
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.clearInterval(pollTimer);
+      if (shellRefreshTimerRef.current !== null) {
+        window.clearTimeout(shellRefreshTimerRef.current);
+      }
+      if (client && channel) {
+        void client.removeChannel(channel);
+      }
     };
-  }, [notifyNewOtpRequests, refreshShell, session]);
+  }, [notifyNewOtpRequests, refreshShell, scheduleShellRefresh, session]);
 
   const handleSignOut = async () => {
     await signOutAdmin();

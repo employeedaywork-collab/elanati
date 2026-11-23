@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate, useOutletContext } from 'react-router-dom';
 import { Sparkles, X } from 'lucide-react';
 import Footer from './Footer';
@@ -10,6 +10,7 @@ import {
   INITIAL_ADS,
   INITIAL_PACKAGES,
 } from '../data/seedData';
+import { supabase } from '../lib/supabase';
 import {
   createAd,
   fetchCategories,
@@ -22,6 +23,7 @@ import {
   getStoredPortalSession,
   incrementAdViews,
   renderWhatsAppTemplate,
+  subscribeToPlatformDataChanged,
 } from '../services/dataService';
 import { Ad, AdCategory, AdSpecs, ItemCondition, PackagePlan, SiteSettings } from '../types';
 
@@ -37,6 +39,7 @@ export interface PublicOutletContext {
   packages: PackagePlan[];
   loadingAds: boolean;
   isAdmin: boolean;
+  refreshTick: number;
   onAddAd: () => void;
   onViewAd: (ad: Ad) => void;
   onSelectPackage: (pkg: PackagePlan, cycle: 'monthly' | 'annual') => void;
@@ -71,6 +74,11 @@ export default function PublicLayout() {
   const [packages, setPackages] = useState<PackagePlan[]>(INITIAL_PACKAGES);
   const [loadingAds, setLoadingAds] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const lastLoadedAtRef = useRef(0);
+  const isRefreshingRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
 
   const [showAddAd, setShowAddAd] = useState(false);
   const [viewingAd, setViewingAd] = useState<Ad | null>(null);
@@ -94,6 +102,7 @@ export default function PublicLayout() {
   } | null>(null);
 
   const loadData = useCallback(async () => {
+    isRefreshingRef.current = true;
     try {
       const [loadedSettings, loadedAds, loadedCategories, loadedPackages, adminSess] =
         await Promise.all([
@@ -105,17 +114,105 @@ export default function PublicLayout() {
         ]);
       setSettings(loadedSettings);
       setAds(loadedAds);
+      setViewingAd((current) => {
+        if (!current) return null;
+        return loadedAds.find((item) => item.id === current.id) || current;
+      });
       setCategories(loadedCategories);
       setPackages(loadedPackages);
       setIsAdmin(Boolean(adminSess));
+      lastLoadedAtRef.current = Date.now();
+      setRefreshTick((t) => t + 1);
     } finally {
+      isRefreshingRef.current = false;
       setLoadingAds(false);
     }
   }, []);
 
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void loadData();
+    }, 250);
+  }, [loadData]);
+
   useEffect(() => {
     void loadData();
-  }, [loadData]);
+
+    const unsubscribeSync = subscribeToPlatformDataChanged(() => {
+      scheduleRefresh();
+    });
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastLoadedAtRef.current > 2000) {
+        scheduleRefresh();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    const pollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && !isRefreshingRef.current) {
+        void loadData();
+      }
+    }, 20000);
+
+    const client = supabase;
+    const channel = client
+      ? client
+          .channel('elanati-public-live')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
+            scheduleRefresh();
+          })
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_site_settings' },
+            () => {
+              scheduleRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_packages' },
+            () => {
+              scheduleRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_categories' },
+            () => {
+              scheduleRefresh();
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'elanati_testimonials' },
+            () => {
+              scheduleRefresh();
+            }
+          )
+          .subscribe()
+      : null;
+
+    return () => {
+      unsubscribeSync();
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.clearInterval(pollTimer);
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+      if (client && channel) {
+        void client.removeChannel(channel);
+      }
+    };
+  }, [loadData, scheduleRefresh]);
 
   // Automatic zero-cost in-platform reminder check only when client already verified OTP session
   useEffect(() => {
@@ -278,6 +375,7 @@ export default function PublicLayout() {
     packages,
     loadingAds,
     isAdmin,
+    refreshTick,
     onAddAd: handleOpenAddAd,
     onViewAd: handleViewAd,
     onSelectPackage: handleSelectPackage,

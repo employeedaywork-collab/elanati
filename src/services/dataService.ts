@@ -73,9 +73,73 @@ function readLocal<T>(key: string, fallback: T): T {
   }
 }
 
+const SYNC_CHANNEL_NAME = 'elanati_sync_v1';
+const SYNC_STORAGE_KEY = 'elanati_sync_tick_v1';
+
+export function notifyPlatformDataChanged(scope = 'all'): void {
+  if (typeof window === 'undefined') return;
+  const payload = {
+    scope,
+    ts: Date.now(),
+    nonce: Math.random().toString(36).slice(2, 8),
+  };
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel(SYNC_CHANNEL_NAME);
+      ch.postMessage(payload);
+      ch.close();
+    }
+  } catch {
+    // ignore BroadcastChannel errors
+  }
+  try {
+    localStorage.setItem(SYNC_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+export function subscribeToPlatformDataChanged(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  let channel: BroadcastChannel | null = null;
+  const handleStorage = (e: StorageEvent) => {
+    if (!e.key || e.key === SYNC_STORAGE_KEY || e.key.startsWith('elanati_local_')) {
+      onChange();
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+      channel.onmessage = () => {
+        onChange();
+      };
+    }
+  } catch {
+    // ignore BroadcastChannel errors
+  }
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+    if (channel) {
+      try {
+        channel.close();
+      } catch {
+        // ignore
+      }
+    }
+  };
+}
+
 function writeLocal<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    if (
+      key !== SYNC_STORAGE_KEY &&
+      key !== STORAGE_KEYS.favorites &&
+      key !== AD_PINS_STORAGE_KEY
+    ) {
+      notifyPlatformDataChanged(key);
+    }
   } catch {
     // ignore storage quota errors
   }
@@ -276,6 +340,7 @@ export async function updateSiteSettings(patch: Partial<SiteSettings>): Promise<
       .select()
       .single();
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('settings');
     return { ...DEFAULT_SITE_SETTINGS, ...(data as Partial<SiteSettings>) };
   }
 
@@ -411,6 +476,7 @@ export async function addCategory(name: string): Promise<string> {
           .from('elanati_categories')
           .update({ is_active: true })
           .eq('id', existing.id);
+        notifyPlatformDataChanged('categories');
       }
       return existing.name;
     }
@@ -425,6 +491,7 @@ export async function addCategory(name: string): Promise<string> {
     if (error && !error.message.toLowerCase().includes('duplicate')) {
       throw new Error(error.message);
     }
+    notifyPlatformDataChanged('categories');
     return clean;
   }
 
@@ -455,6 +522,7 @@ export async function deleteCategoryAdmin(id: string): Promise<void> {
   if (supabase) {
     const { error } = await supabase.from('elanati_categories').delete().eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('categories');
     return;
   }
 
@@ -1084,6 +1152,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
           if (normalized.owner_pin) {
             saveAdPinLocally(normalized.id, normalized.owner_pin);
           }
+          notifyPlatformDataChanged('ads');
           return {
             ad: normalized,
             requiresReview: Boolean(json.requiresReview),
@@ -1287,6 +1356,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     });
     if (error) throw new Error(error.message);
     saveAdPinLocally(newAd.id, ownerPin);
+    notifyPlatformDataChanged('ads');
     return { ad: newAd, requiresReview };
   }
 
@@ -1368,6 +1438,7 @@ export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad>
       .select(PUBLIC_AD_COLUMNS)
       .single();
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('ads');
     return normalizeAdRow(data);
   }
 
@@ -1458,6 +1529,7 @@ export async function editAdByClient(input: {
       p_extra_images: input.extra_images ? safeExtras : null,
     });
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('ads');
     return normalizeAdRow(data);
   }
 
@@ -1532,6 +1604,7 @@ export async function deleteAdAdmin(id: string): Promise<void> {
   if (supabase) {
     const { error } = await supabase.from('elanati_ads').delete().eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('ads');
     return;
   }
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
@@ -1641,6 +1714,7 @@ export async function createContactTicket(input: CreateTicketInput): Promise<Con
       // ignore if function not yet created
     }
 
+    notifyPlatformDataChanged('tickets');
     return ticket;
   }
 
@@ -1775,6 +1849,7 @@ export async function postSupportMessage(input: {
         })
         .eq('ticket_code', cleanCode);
     }
+    notifyPlatformDataChanged('tickets');
     return msg;
   }
 
@@ -1841,6 +1916,7 @@ export async function updateTicketStatusAdmin(id: string, status: TicketStatus):
       .update({ status })
       .eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('tickets');
     return;
   }
   const msgs = readLocal<ContactMessage[]>(STORAGE_KEYS.messages, []);
@@ -1911,6 +1987,7 @@ export async function createPackageRequest(input: {
       max_ads: req.max_ads,
     });
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('packages');
     return req;
   }
 
@@ -1941,6 +2018,7 @@ export async function updatePackageRequestAdmin(
       .update(patch)
       .eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('packages');
     return;
   }
   const all = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
@@ -2127,6 +2205,7 @@ export async function updatePackageAdmin(id: string, patch: Partial<PackagePlan>
       .select()
       .single();
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('packages');
     return data as PackagePlan;
   }
   const all = readLocal<PackagePlan[]>(STORAGE_KEYS.packages, INITIAL_PACKAGES);
@@ -2185,6 +2264,7 @@ export async function createTestimonialAdmin(
       .select()
       .single();
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('testimonials');
     return data as Testimonial;
   }
 
@@ -2200,6 +2280,7 @@ export async function updateTestimonialAdmin(
   if (supabase) {
     const { error } = await supabase.from('elanati_testimonials').update(patch).eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('testimonials');
     return;
   }
   const all = readLocal<Testimonial[]>(STORAGE_KEYS.testimonials, INITIAL_TESTIMONIALS);
@@ -2213,6 +2294,7 @@ export async function deleteTestimonialAdmin(id: string): Promise<void> {
   if (supabase) {
     const { error } = await supabase.from('elanati_testimonials').delete().eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('testimonials');
     return;
   }
   const all = readLocal<Testimonial[]>(STORAGE_KEYS.testimonials, INITIAL_TESTIMONIALS);
@@ -2402,6 +2484,9 @@ export async function archiveExpiredAdsAdmin(): Promise<number> {
   if (supabase) {
     const { data: rpcCount, error: rpcErr } = await supabase.rpc('archive_expired_elanati_ads');
     if (!rpcErr && typeof rpcCount === 'number') {
+      if (rpcCount > 0) {
+        notifyPlatformDataChanged('ads');
+      }
       return rpcCount;
     }
 
@@ -2418,7 +2503,10 @@ export async function archiveExpiredAdsAdmin(): Promise<number> {
         .from('elanati_ads')
         .update({ status: 'archived', updated_at: nowIso })
         .in('id', ids);
-      if (!error) return ids.length;
+      if (!error) {
+        notifyPlatformDataChanged('ads');
+        return ids.length;
+      }
     }
     return 0;
   }
@@ -2957,6 +3045,7 @@ export async function submitAdReport(input: {
       status: 'open',
     });
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('reports');
     return {
       id,
       ad_id: input.adId || null,
@@ -3021,6 +3110,7 @@ export async function updateAdReportStatusAdmin(
       .update({ status })
       .eq('id', id);
     if (error) throw new Error(error.message);
+    notifyPlatformDataChanged('reports');
     return;
   }
   const existing = readLocal<AdReport[]>(STORAGE_KEYS.adReports, []);

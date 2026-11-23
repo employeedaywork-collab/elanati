@@ -1157,7 +1157,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
   const isFeatured = input.asAdmin ? Boolean(input.featured) : Boolean(allowance?.featured);
 
   const priorityRank = input.asAdmin
-    ? effectivePackage === 'المؤسسي'
+    ? effectivePackage === 'المؤسسي' || expiresAt === null
       ? 2
       : effectivePackage === 'الاحترافي' || isFeatured
       ? 1

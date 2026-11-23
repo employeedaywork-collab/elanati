@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Clock, Crown, Heart, Image as ImageIcon, MapPin, Search, Star } from 'lucide-react';
 import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES, ITEM_CONDITION_LABELS } from '../data/seedData';
-import { sanitizeAdImageUrl, sanitizeHttpUrl } from '../lib/supabase';
+import { sanitizeAdImageUrl } from '../lib/supabase';
 import { getFavoriteAdIds, getRemainingDays, toggleFavoriteAdId } from '../services/dataService';
 import { Ad, AdCategory, ItemCondition } from '../types';
 
@@ -73,8 +73,14 @@ export default function Advertisements({
     );
   });
 
+  const isPermanentOrEnterpriseAd = (ad: Ad) =>
+    ad.priority_rank === 2 ||
+    ad.package_name === 'المؤسسي' ||
+    !ad.expires_at ||
+    Boolean(ad.banner_url);
+
   const enterpriseBanners = ads.filter(
-    (ad) => ad.status === 'approved' && (ad.priority_rank === 2 || Boolean(ad.banner_url))
+    (ad) => ad.status === 'approved' && isPermanentOrEnterpriseAd(ad)
   );
 
   const formatDate = (iso: string) => {
@@ -116,20 +122,21 @@ export default function Advertisements({
               <span>بانرات وإعلانات الشركات المميزة (الباقة المؤسسية)</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {enterpriseBanners.slice(0, 2).map((ad) => (
-                <div
-                  key={`banner-${ad.id}`}
-                  onClick={() => onViewAd(ad)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') onViewAd(ad);
-                  }}
-                  className="cursor-pointer rounded-2xl bg-slate-900 text-white border border-blue-500/40 overflow-hidden shadow-md hover:shadow-lg transition-all flex flex-col sm:flex-row"
-                >
-                  {(() => {
-                    const safeBanner = sanitizeHttpUrl(ad.banner_url);
-                    return safeBanner ? (
+              {enterpriseBanners.slice(0, 6).map((ad) => {
+                const remDays = getRemainingDays(ad.expires_at);
+                const safeBanner = sanitizeAdImageUrl(ad.banner_url || ad.image_url);
+                return (
+                  <div
+                    key={`banner-${ad.id}`}
+                    onClick={() => onViewAd(ad)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') onViewAd(ad);
+                    }}
+                    className="cursor-pointer rounded-2xl bg-slate-900 text-white border border-blue-500/40 overflow-hidden shadow-md hover:shadow-lg transition-all flex flex-col sm:flex-row"
+                  >
+                    {safeBanner ? (
                       <div className="sm:w-44 h-36 sm:h-auto shrink-0 bg-slate-800">
                         <img
                           src={safeBanner}
@@ -141,29 +148,34 @@ export default function Advertisements({
                           }}
                         />
                       </div>
-                    ) : null;
-                  })()}
-                  <div className="p-5 flex-1 flex flex-col justify-between gap-3">
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400">
-                          <Crown className="w-3.5 h-3.5" />
-                          أولوية مؤسسية · {ad.city}
-                        </span>
-                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300">
-                          ظهور دائم
-                        </span>
+                    ) : null}
+                    <div className="p-5 flex-1 flex flex-col justify-between gap-3">
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400">
+                            <Crown className="w-3.5 h-3.5" />
+                            {ad.package_name === 'المؤسسي' || ad.priority_rank === 2
+                              ? 'أولوية مؤسسية'
+                              : 'إعلان دائم مميز'}{' '}
+                            · {ad.city}
+                          </span>
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300">
+                            {remDays === null
+                              ? 'ظهور دائم'
+                              : `متبقي ${remDays} ${remDays === 1 ? 'يوم' : 'أيام'}`}
+                          </span>
+                        </div>
+                        <h3 className="text-base font-extrabold text-white mb-1">{ad.title}</h3>
+                        <p className="text-xs text-slate-300 line-clamp-2">{ad.description}</p>
                       </div>
-                      <h3 className="text-base font-extrabold text-white mb-1">{ad.title}</h3>
-                      <p className="text-xs text-slate-300 line-clamp-2">{ad.description}</p>
-                    </div>
-                    <div className="flex items-center justify-between text-xs pt-1 border-t border-white/10">
-                      <span className="tabular-nums text-slate-300 font-semibold">{ad.contact}</span>
-                      <span className="text-amber-400 font-bold">استعراض البانر ←</span>
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-white/10">
+                        <span className="tabular-nums text-slate-300 font-semibold">{ad.contact}</span>
+                        <span className="text-amber-400 font-bold">استعراض البانر ←</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -272,7 +284,8 @@ export default function Advertisements({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredAds.map((ad) => {
               const remainingDays = getRemainingDays(ad.expires_at);
-              const isEnterprise = ad.package_name === 'المؤسسي' || ad.priority_rank === 2;
+              const isEnterprise =
+                ad.package_name === 'المؤسسي' || ad.priority_rank === 2 || !ad.expires_at;
               const extraCount = ad.extra_images?.length || 0;
               const isFav = favoriteIds.includes(ad.id);
               const safeThumb = sanitizeAdImageUrl(ad.image_url);

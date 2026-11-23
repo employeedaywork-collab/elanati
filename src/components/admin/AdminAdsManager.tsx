@@ -120,6 +120,7 @@ export default function AdminAdsManager({
         status: 'approved',
         starts_at: now.toISOString(),
         expires_at: nextExpiry,
+        ...(days === null ? { priority_rank: 2, featured: true } : {}),
       });
       await onRefresh();
     } catch (err: any) {
@@ -155,7 +156,7 @@ export default function AdminAdsManager({
     setActionError(null);
     try {
       const priorityRank =
-        editingAd.package_name === 'المؤسسي'
+        editingAd.package_name === 'المؤسسي' || editingAd.expires_at === null
           ? 2
           : editingAd.package_name === 'الاحترافي' || editingAd.featured
           ? 1
@@ -258,7 +259,12 @@ export default function AdminAdsManager({
   const setEditingDuration = (days: number | null) => {
     if (!editingAd) return;
     if (days === null) {
-      setEditingAd({ ...editingAd, expires_at: null });
+      setEditingAd({
+        ...editingAd,
+        expires_at: null,
+        priority_rank: 2,
+        featured: true,
+      });
       return;
     }
     const base = new Date();
@@ -658,7 +664,16 @@ export default function AdminAdsManager({
                 <label className="block text-xs font-bold text-slate-600 mb-1">الباقة</label>
                 <select
                   value={editingAd.package_name || 'مجاني'}
-                  onChange={(e) => setEditingAd({ ...editingAd, package_name: e.target.value })}
+                  onChange={(e) => {
+                    const pkg = e.target.value;
+                    setEditingAd({
+                      ...editingAd,
+                      package_name: pkg,
+                      ...(pkg === 'المؤسسي'
+                        ? { expires_at: null, priority_rank: 2, featured: true }
+                        : {}),
+                    });
+                  }}
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
                 >
                   <option value="مجاني">مجاني (7 أيام)</option>

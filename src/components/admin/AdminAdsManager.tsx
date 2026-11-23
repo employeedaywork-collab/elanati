@@ -41,7 +41,7 @@ export default function AdminAdsManager({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const [newAdForm, setNewAdForm] = useState({
+  const buildEmptyAdminAdForm = () => ({
     client_name: '',
     title: '',
     category: (categories[0] || 'إعلانات تجارية') as AdCategory,
@@ -64,6 +64,8 @@ export default function AdminAdsManager({
     duration_days: 7 as number | null,
     featured: false,
   });
+
+  const [newAdForm, setNewAdForm] = useState(buildEmptyAdminAdForm);
 
   const filtered = ads.filter((ad) => {
     const expired = isAdExpired(ad);
@@ -330,7 +332,10 @@ export default function AdminAdsManager({
 
         <button
           type="button"
-          onClick={() => setCreatingNew(true)}
+          onClick={() => {
+            setNewAdForm(buildEmptyAdminAdForm());
+            setCreatingNew(true);
+          }}
           className="inline-flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0"
         >
           <Plus className="w-4 h-4" />
@@ -787,6 +792,7 @@ export default function AdminAdsManager({
           <div className="absolute inset-0 bg-slate-950/60" onClick={() => setCreatingNew(false)} />
           <form
             onSubmit={handleCreateAdminAd}
+            autoComplete="off"
             className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -798,6 +804,7 @@ export default function AdminAdsManager({
             <input
               type="text"
               required
+              autoComplete="off"
               placeholder="اسم المعلن / المسؤول"
               value={newAdForm.client_name}
               onChange={(e) => setNewAdForm({ ...newAdForm, client_name: e.target.value })}

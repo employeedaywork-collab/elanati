@@ -37,6 +37,28 @@ interface AddAdFormProps {
   onOpenPortal: (query: string) => void;
 }
 
+const createEmptyFormState = (defaultCategory: string) => ({
+  client_name: '',
+  title: '',
+  category: defaultCategory as AdCategory,
+  custom_category: '',
+  description: '',
+  contact: '',
+  city: '',
+  image: '📦',
+  image_url: '',
+  extra_images: [] as string[],
+  banner_url: '',
+  price: '',
+  price_negotiable: false,
+  item_condition: 'unspecified' as ItemCondition,
+  specs: {} as AdSpecs,
+  latitude: null as number | null,
+  longitude: null as number | null,
+  location_address: '',
+  subscription_code: '',
+});
+
 export default function AddAdForm({
   settings,
   categories = DEFAULT_CATEGORIES,
@@ -45,39 +67,8 @@ export default function AddAdForm({
   onUpgrade,
   onOpenPortal,
 }: AddAdFormProps) {
-  const [formData, setFormData] = useState(() => {
-    let savedName = '';
-    let savedPhone = '';
-    let savedSubCode = '';
-    try {
-      savedName = localStorage.getItem('elanati_last_client_name') || '';
-      savedPhone = localStorage.getItem('elanati_last_client_phone') || '';
-      savedSubCode = localStorage.getItem('elanati_last_sub_code') || '';
-    } catch {
-      // ignore
-    }
-    return {
-      client_name: savedName,
-      title: '',
-      category: (categories[0] || 'إعلانات شخصية') as AdCategory,
-      custom_category: '',
-      description: '',
-      contact: savedPhone,
-      city: '',
-      image: '📦',
-      image_url: '',
-      extra_images: [] as string[],
-      banner_url: '',
-      price: '',
-      price_negotiable: false,
-      item_condition: 'unspecified' as ItemCondition,
-      specs: {} as AdSpecs,
-      latitude: null as number | null,
-      longitude: null as number | null,
-      location_address: '',
-      subscription_code: savedSubCode,
-    };
-  });
+  const defaultCategory = categories[0] || 'إعلانات شخصية';
+  const [formData, setFormData] = useState(() => createEmptyFormState(defaultCategory));
 
   const [allowance, setAllowance] = useState<AdAllowance | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -85,6 +76,7 @@ export default function AddAdForm({
   const [doneState, setDoneState] = useState<{
     requiresReview: boolean;
     phone: string;
+    subscriptionCode?: string;
     ownerPin?: string;
   } | null>(null);
   const [copiedPin, setCopiedPin] = useState(false);
@@ -139,6 +131,9 @@ export default function AddAdForm({
         ? Math.max(0, Number(formData.price))
         : null;
 
+    const submittedPhone = formData.contact.trim();
+    const submittedSubCode = formData.subscription_code.trim().toUpperCase();
+
     setSubmitting(true);
     try {
       const result = await onSubmit({
@@ -159,20 +154,21 @@ export default function AddAdForm({
         latitude: formData.latitude,
         longitude: formData.longitude,
         location_address: formData.location_address.trim() || null,
-        subscription_code: formData.subscription_code || undefined,
+        subscription_code: submittedSubCode || undefined,
       });
       try {
-        localStorage.setItem('elanati_last_client_name', formData.client_name.trim());
-        localStorage.setItem('elanati_last_client_phone', formData.contact.trim());
-        if (formData.subscription_code.trim()) {
-          localStorage.setItem('elanati_last_sub_code', formData.subscription_code.trim().toUpperCase());
-        }
+        localStorage.removeItem('elanati_last_client_name');
+        localStorage.removeItem('elanati_last_client_phone');
+        localStorage.removeItem('elanati_last_sub_code');
       } catch {
         // ignore
       }
+      setFormData(createEmptyFormState(defaultCategory));
+      setAllowance(null);
       setDoneState({
         requiresReview: result.requiresReview,
-        phone: formData.contact.trim(),
+        phone: submittedPhone,
+        subscriptionCode: submittedSubCode || undefined,
         ownerPin: result.ownerPin,
       });
     } catch (err: any) {
@@ -237,7 +233,7 @@ export default function AddAdForm({
                 type="button"
                 onClick={() => {
                   onClose();
-                  onOpenPortal(formData.subscription_code || doneState.phone);
+                  onOpenPortal(doneState.subscriptionCode || doneState.phone);
                 }}
                 className="w-full bg-blue-700 hover:bg-blue-800 text-white py-3.5 rounded-xl font-bold text-sm transition-colors"
               >
@@ -253,7 +249,7 @@ export default function AddAdForm({
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <form onSubmit={handleSubmit} autoComplete="off" className="p-6 space-y-4">
             <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 leading-relaxed">
               {allowance ? (
                 <div className="space-y-1">
@@ -349,6 +345,7 @@ export default function AddAdForm({
               <input
                 type="text"
                 required
+                autoComplete="off"
                 value={formData.client_name}
                 onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
                 placeholder="مثال: أحمد محمود / شركة النيل للتوريدات"
@@ -364,6 +361,7 @@ export default function AddAdForm({
                 <input
                   type="tel"
                   required
+                  autoComplete="off"
                   value={formData.contact}
                   onChange={(e) => setFormData({ ...formData, contact: e.target.value })}
                   placeholder="01xxxxxxxxx"
@@ -376,6 +374,7 @@ export default function AddAdForm({
                 </label>
                 <input
                   type="text"
+                  autoComplete="off"
                   value={formData.subscription_code}
                   onChange={(e) => setFormData({ ...formData, subscription_code: e.target.value })}
                   placeholder="SUB-XXXXX"

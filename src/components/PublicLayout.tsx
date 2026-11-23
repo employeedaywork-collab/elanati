@@ -77,6 +77,7 @@ export default function PublicLayout() {
   const [refreshTick, setRefreshTick] = useState(0);
 
   const lastLoadedAtRef = useRef(0);
+  const refreshStartedAtRef = useRef(0);
   const isRefreshingRef = useRef(false);
   const refreshTimerRef = useRef<number | null>(null);
 
@@ -103,15 +104,14 @@ export default function PublicLayout() {
 
   const loadData = useCallback(async () => {
     isRefreshingRef.current = true;
+    refreshStartedAtRef.current = Date.now();
     try {
-      const [loadedSettings, loadedAds, loadedCategories, loadedPackages, adminSess] =
-        await Promise.all([
-          fetchSiteSettings(),
-          fetchPublicAds(),
-          fetchCategories(),
-          fetchPackages(),
-          getAdminSession().catch(() => null),
-        ]);
+      const [loadedSettings, loadedAds, loadedCategories, loadedPackages] = await Promise.all([
+        fetchSiteSettings(),
+        fetchPublicAds(),
+        fetchCategories(),
+        fetchPackages(),
+      ]);
       setSettings(loadedSettings);
       setAds(loadedAds);
       setViewingAd((current) => {
@@ -120,7 +120,6 @@ export default function PublicLayout() {
       });
       setCategories(loadedCategories);
       setPackages(loadedPackages);
-      setIsAdmin(Boolean(adminSess));
       lastLoadedAtRef.current = Date.now();
       setRefreshTick((t) => t + 1);
     } finally {
@@ -140,70 +139,114 @@ export default function PublicLayout() {
   }, [loadData]);
 
   useEffect(() => {
+    let mounted = true;
+    const syncAdminFlag = () => {
+      void getAdminSession()
+        .then((sess) => {
+          if (mounted) setIsAdmin(Boolean(sess));
+        })
+        .catch(() => {
+          if (mounted) setIsAdmin(false);
+        });
+    };
+    syncAdminFlag();
+    if (supabase) {
+      const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+        if (event === 'TOKEN_REFRESHED') return;
+        syncAdminFlag();
+      });
+      return () => {
+        mounted = false;
+        sub.subscription.unsubscribe();
+      };
+    }
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     void loadData();
 
     const unsubscribeSync = subscribeToPlatformDataChanged(() => {
       scheduleRefresh();
     });
 
-    const handleVisibilityOrFocus = () => {
+    const client = supabase;
+    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+
+    const ensureRealtimeChannel = () => {
+      if (!client) return;
+      const state = (channel as { state?: string } | null)?.state;
+      if (channel && state !== 'closed' && state !== 'errored') {
+        return;
+      }
+      if (channel) {
+        void client.removeChannel(channel);
+      }
+      channel = client
+        .channel(`elanati-public-live-${Date.now()}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
+          scheduleRefresh();
+        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_site_settings' },
+          () => {
+            scheduleRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_packages' },
+          () => {
+            scheduleRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_categories' },
+          () => {
+            scheduleRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_testimonials' },
+          () => {
+            scheduleRefresh();
+          }
+        )
+        .subscribe();
+    };
+
+    ensureRealtimeChannel();
+
+    const handleWakeOrOnline = () => {
       if (document.visibilityState === 'hidden') return;
+      ensureRealtimeChannel();
       if (Date.now() - lastLoadedAtRef.current > 2000) {
         scheduleRefresh();
       }
     };
 
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleWakeOrOnline);
+    window.addEventListener('online', handleWakeOrOnline);
+    document.addEventListener('visibilitychange', handleWakeOrOnline);
 
     const pollTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !isRefreshingRef.current) {
+      const staleRefresh = Date.now() - refreshStartedAtRef.current > 14000;
+      if (document.visibilityState === 'visible' && (!isRefreshingRef.current || staleRefresh)) {
+        ensureRealtimeChannel();
         void loadData();
       }
     }, 20000);
 
-    const client = supabase;
-    const channel = client
-      ? client
-          .channel('elanati-public-live')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
-            scheduleRefresh();
-          })
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_site_settings' },
-            () => {
-              scheduleRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_packages' },
-            () => {
-              scheduleRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_categories' },
-            () => {
-              scheduleRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_testimonials' },
-            () => {
-              scheduleRefresh();
-            }
-          )
-          .subscribe()
-      : null;
-
     return () => {
       unsubscribeSync();
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleWakeOrOnline);
+      window.removeEventListener('online', handleWakeOrOnline);
+      document.removeEventListener('visibilitychange', handleWakeOrOnline);
       window.clearInterval(pollTimer);
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);

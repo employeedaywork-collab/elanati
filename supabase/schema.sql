@@ -165,19 +165,22 @@ BEGIN
   END IF;
 END $$;
 
--- ضبط تاريخ الانتهاء للإعلانات المجانية القديمة تلقائياً إن لم يكن مضبوطاً
+-- ضبط تواريخ البدء وترتيب الأولوية للإعلانات (مع الحفاظ على الإعلانات الدائمة عند إعادة تشغيل السكربت)
 UPDATE public.elanati_ads
 SET starts_at = COALESCE(starts_at, created_at),
-    expires_at = CASE
-      WHEN package_name = 'مجاني' AND expires_at IS NULL THEN COALESCE(starts_at, created_at) + interval '7 days'
-      WHEN package_name = 'الاحترافي' AND expires_at IS NULL THEN COALESCE(starts_at, created_at) + interval '30 days'
-      ELSE expires_at
-    END,
     priority_rank = CASE
-      WHEN package_name = 'المؤسسي' THEN 2
+      WHEN package_name = 'المؤسسي' OR expires_at IS NULL THEN 2
       WHEN package_name = 'الاحترافي' OR featured = true THEN 1
       ELSE 0
-    END;
+    END
+WHERE starts_at IS NULL
+   OR priority_rank IS DISTINCT FROM (
+     CASE
+       WHEN package_name = 'المؤسسي' OR expires_at IS NULL THEN 2
+       WHEN package_name = 'الاحترافي' OR featured = true THEN 1
+       ELSE 0
+     END
+   );
 
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_status_created ON public.elanati_ads (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_expires ON public.elanati_ads (expires_at);
@@ -1706,6 +1709,7 @@ CREATE TABLE IF NOT EXISTS public.elanati_access_logs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   event_type text NOT NULL CHECK (
     event_type IN (
+      'site_visit',
       'admin_login_success',
       'admin_login_failed',
       'ad_submit_ok',
@@ -1722,6 +1726,34 @@ CREATE TABLE IF NOT EXISTS public.elanati_access_logs (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- تحديث آمن لقيد أنواع الأحداث إذا كان الجدول منشأً مسبقاً
+DO $$
+DECLARE
+  v_con text;
+BEGIN
+  SELECT conname INTO v_con
+  FROM pg_constraint
+  WHERE conrelid = 'public.elanati_access_logs'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) ILIKE '%event_type%';
+  IF v_con IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE public.elanati_access_logs DROP CONSTRAINT %I', v_con);
+  END IF;
+  ALTER TABLE public.elanati_access_logs
+    ADD CONSTRAINT elanati_access_logs_event_type_check
+    CHECK (
+      event_type IN (
+        'site_visit',
+        'admin_login_success',
+        'admin_login_failed',
+        'ad_submit_ok',
+        'ad_submit_blocked',
+        'otp_request',
+        'ad_report'
+      )
+    );
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_elanati_access_logs_created
   ON public.elanati_access_logs (created_at DESC);
@@ -1778,6 +1810,35 @@ BEGIN
     v_masked,
     left(trim(COALESCE(p_reason, '')), 200),
     jsonb_build_object('source', 'client_auth')
+  );
+END;
+$$;
+
+-- تسجيل دخول زوار المنصة كإشعار مراقبة للمدير (بصيغة آمنة بدون بيانات حساسة)
+CREATE OR REPLACE FUNCTION public.log_elanati_site_visit(
+  p_path text DEFAULT '/',
+  p_device_hint text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_path text := COALESCE(NULLIF(left(trim(COALESCE(p_path, '/')), 100), ''), '/');
+  v_hint text := COALESCE(NULLIF(left(trim(COALESCE(p_device_hint, '')), 80), ''), 'زائر متصفح');
+BEGIN
+  INSERT INTO public.elanati_access_logs (
+    event_type,
+    actor_label,
+    reason,
+    metadata
+  )
+  VALUES (
+    'site_visit',
+    v_hint,
+    format('دخول زائر للمنصة (%s)', v_path),
+    jsonb_build_object('source', 'public_visit_rpc', 'path', v_path)
   );
 END;
 $$;
@@ -1890,6 +1951,7 @@ GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text, text) TO
 GRANT EXECUTE ON FUNCTION public.get_elanati_public_templates() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.send_elanati_internal_auto_reply(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.log_elanati_admin_login_attempt(text, boolean, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.log_elanati_site_visit(text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_expired_elanati_ads() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_elanati_admin_session() TO authenticated;
@@ -1933,6 +1995,18 @@ BEGIN
     END;
     BEGIN
       ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_ad_reports;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_site_settings;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_packages;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_testimonials;
     EXCEPTION WHEN duplicate_object THEN NULL;
     END;
   END IF;

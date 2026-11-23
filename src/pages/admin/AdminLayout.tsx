@@ -475,9 +475,23 @@ export default function AdminLayout() {
     void initAuth();
 
     if (supabase) {
-      const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+        if (event === 'TOKEN_REFRESHED') return;
         void getAdminSession().then((s) => {
-          if (mounted) setSession(s);
+          if (!mounted) return;
+          setSession((prev) => {
+            if (!prev && !s) return prev;
+            if (
+              prev &&
+              s &&
+              prev.email === s.email &&
+              prev.fullName === s.fullName &&
+              prev.isPreviewMode === s.isPreviewMode
+            ) {
+              return prev;
+            }
+            return s;
+          });
         });
       });
       return () => {
@@ -499,18 +513,114 @@ export default function AdminLayout() {
       scheduleShellRefresh();
     });
 
-    const handleVisibilityOrFocus = () => {
+    const client = supabase;
+    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+
+    const ensureRealtimeChannel = () => {
+      if (!client) return;
+      const state = (channel as { state?: string } | null)?.state;
+      if (channel && state !== 'closed' && state !== 'errored') {
+        return;
+      }
+      if (channel) {
+        void client.removeChannel(channel);
+      }
+      channel = client
+        .channel(`elanati-admin-badges-live-${Date.now()}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
+          scheduleShellRefresh();
+        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_contact_messages' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_support_messages' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_package_requests' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_portal_otps' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_access_logs' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_ad_reports' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_site_settings' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_packages' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_testimonials' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_categories' },
+          () => {
+            scheduleShellRefresh();
+          }
+        )
+        .subscribe();
+    };
+
+    ensureRealtimeChannel();
+
+    const handleWakeOrOnline = () => {
       if (document.visibilityState === 'hidden') return;
+      ensureRealtimeChannel();
       if (Date.now() - lastShellRefreshAtRef.current > 2000) {
         scheduleShellRefresh();
       }
     };
 
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleWakeOrOnline);
+    window.addEventListener('online', handleWakeOrOnline);
+    document.addEventListener('visibilitychange', handleWakeOrOnline);
 
     // Polling fallback every 15s so OTP and pending-ad alerts trigger reliably even without WebSocket/Realtime
     const pollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      ensureRealtimeChannel();
       void Promise.all([fetchAdminBadgeCounts(), fetchPendingPortalOtpsAdmin()]).then(
         ([counts, otpItems]) => {
           const hadIncrease =
@@ -529,90 +639,11 @@ export default function AdminLayout() {
       );
     }, 15000);
 
-    const client = supabase;
-    const channel = client
-      ? client
-          .channel('elanati-admin-badges-live')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'elanati_ads' }, () => {
-            scheduleShellRefresh();
-          })
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_contact_messages' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_support_messages' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_package_requests' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_portal_otps' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_access_logs' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_ad_reports' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_site_settings' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_packages' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_testimonials' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'elanati_categories' },
-            () => {
-              scheduleShellRefresh();
-            }
-          )
-          .subscribe()
-      : null;
-
     return () => {
       unsubscribeSync();
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleWakeOrOnline);
+      window.removeEventListener('online', handleWakeOrOnline);
+      document.removeEventListener('visibilitychange', handleWakeOrOnline);
       window.clearInterval(pollTimer);
       if (shellRefreshTimerRef.current !== null) {
         window.clearTimeout(shellRefreshTimerRef.current);

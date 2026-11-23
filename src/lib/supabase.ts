@@ -63,11 +63,58 @@ export const supabaseConfigDiagnostics = {
   projectHost: urlInfo.host,
 };
 
+function combineAbortSignals(a?: AbortSignal | null, b?: AbortSignal | null): AbortSignal | undefined {
+  if (!a && !b) return undefined;
+  if (!a) return b || undefined;
+  if (!b) return a || undefined;
+  if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).any === 'function') {
+    return (AbortSignal as any).any([a, b]);
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (a.aborted || b.aborted) {
+    controller.abort();
+    return controller.signal;
+  }
+  a.addEventListener('abort', onAbort, { once: true });
+  b.addEventListener('abort', onAbort, { once: true });
+  return controller.signal;
+}
+
+const resilientSupabaseFetch: typeof fetch = async (input, init) => {
+  const method = String(
+    init?.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET')
+  ).toUpperCase();
+  const canRetry = method === 'GET' || method === 'HEAD';
+  const maxAttempts = canRetry ? 2 : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const timeoutController = new AbortController();
+    const timer = globalThis.setTimeout(() => timeoutController.abort(), 12000);
+    const signal = combineAbortSignals(init?.signal, timeoutController.signal);
+    try {
+      const response = await fetch(input, { ...init, signal });
+      globalThis.clearTimeout(timer);
+      return response;
+    } catch (err) {
+      globalThis.clearTimeout(timer);
+      if (init?.signal?.aborted || attempt >= maxAttempts) {
+        throw err;
+      }
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
+    }
+  }
+  return fetch(input, init);
+};
+
 export const supabase: SupabaseClient | null = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+      },
+      global: {
+        fetch: resilientSupabaseFetch,
       },
     })
   : null;

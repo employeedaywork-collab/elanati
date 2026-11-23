@@ -1,4 +1,4 @@
-import { Check, Eye, Inbox, Layers, Megaphone, X } from 'lucide-react';
+import { Check, Eye, Inbox, Layers, Megaphone, ShieldAlert, X } from 'lucide-react';
 import { isAdExpired } from '../../services/dataService';
 import { Ad, ContactMessage, PackageRequest } from '../../types';
 
@@ -6,9 +6,11 @@ interface AdminOverviewProps {
   ads: Ad[];
   tickets: ContactMessage[];
   packageRequests: PackageRequest[];
+  openReports?: number;
+  blockedAttempts?: number;
   onApproveAd: (id: string) => Promise<void>;
   onRejectAd: (id: string) => Promise<void>;
-  onNavigateTab: (tab: 'ads' | 'inbox' | 'packages') => void;
+  onNavigateTab: (tab: 'ads' | 'inbox' | 'packages' | 'security') => void;
   onOpenTicket: (ticketCode: string) => void;
 }
 
@@ -16,6 +18,8 @@ export default function AdminOverview({
   ads,
   tickets,
   packageRequests,
+  openReports = 0,
+  blockedAttempts = 0,
   onApproveAd,
   onRejectAd,
   onNavigateTab,
@@ -92,6 +96,27 @@ export default function AdminOverview({
           </p>
           <p className="text-xs text-slate-500 mt-1">تفاعل الزوار مع العروض</p>
         </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+            <ShieldAlert className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-sm font-extrabold text-slate-900">سجل الدخول والأمان وبلاغات الإعلانات</p>
+            <p className="text-xs text-slate-500 tabular-nums">
+              {blockedAttempts} محاولة تلاعب مجاني محظورة (24س) · {openReports} بلاغات إعلانات بانتظار المراجعة
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onNavigateTab('security')}
+          className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shrink-0 self-start sm:self-auto"
+        >
+          فتح سجل الأمان ←
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

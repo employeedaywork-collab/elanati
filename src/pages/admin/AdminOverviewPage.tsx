@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AdminOverview from '../../components/admin/AdminOverview';
 import {
+  fetchAdminBadgeCounts,
   fetchAllAdsAdmin,
   fetchAllTicketsAdmin,
   fetchPackageRequestsAdmin,
@@ -17,20 +18,26 @@ export default function AdminOverviewPage() {
   const [ads, setAds] = useState<Ad[]>([]);
   const [tickets, setTickets] = useState<ContactMessage[]>([]);
   const [packageRequests, setPackageRequests] = useState<PackageRequest[]>([]);
+  const [securityCounts, setSecurityCounts] = useState({ openReports: 0, blockedAttempts: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const loadOverview = useCallback(async () => {
     setError('');
     try {
-      const [loadedAds, loadedTickets, loadedRequests] = await Promise.all([
+      const [loadedAds, loadedTickets, loadedRequests, badgeCounts] = await Promise.all([
         fetchAllAdsAdmin(),
         fetchAllTicketsAdmin(),
         fetchPackageRequestsAdmin(),
+        fetchAdminBadgeCounts(),
       ]);
       setAds(loadedAds);
       setTickets(loadedTickets);
       setPackageRequests(loadedRequests);
+      setSecurityCounts({
+        openReports: badgeCounts.openReports,
+        blockedAttempts: badgeCounts.blockedAttempts,
+      });
     } catch (err: any) {
       setError(err?.message || 'تعذر تحميل ملخص لوحة التحكم');
     } finally {
@@ -74,6 +81,8 @@ export default function AdminOverviewPage() {
       ads={ads}
       tickets={tickets}
       packageRequests={packageRequests}
+      openReports={securityCounts.openReports}
+      blockedAttempts={securityCounts.blockedAttempts}
       onApproveAd={handleApproveAd}
       onRejectAd={handleRejectAd}
       onNavigateTab={(tab) => navigate(`/admin/${tab}`)}

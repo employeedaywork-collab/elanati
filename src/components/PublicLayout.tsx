@@ -23,7 +23,7 @@ import {
   incrementAdViews,
   renderWhatsAppTemplate,
 } from '../services/dataService';
-import { Ad, AdCategory, PackagePlan, SiteSettings } from '../types';
+import { Ad, AdCategory, AdSpecs, ItemCondition, PackagePlan, SiteSettings } from '../types';
 
 const AddAdForm = lazy(() => import('./AddAdForm'));
 const AdDetailsModal = lazy(() => import('./AdDetailsModal'));
@@ -201,6 +201,13 @@ export default function PublicLayout() {
     image_url?: string;
     extra_images?: string[];
     banner_url?: string;
+    price?: number | null;
+    price_negotiable?: boolean;
+    item_condition?: ItemCondition;
+    specs?: AdSpecs | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    location_address?: string | null;
     subscription_code?: string;
   }): Promise<{ requiresReview: boolean; ownerPin: string }> => {
     const result = await createAd({

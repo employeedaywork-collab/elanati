@@ -129,6 +129,15 @@ CREATE TABLE IF NOT EXISTS public.elanati_ads (
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS client_name text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS extra_images jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS banner_url text;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS price numeric;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS price_negotiable boolean NOT NULL DEFAULT false;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS item_condition text NOT NULL DEFAULT 'unspecified';
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS specs jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS latitude double precision;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS longitude double precision;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS location_address text;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS ip_hash text;
+ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS device_hash text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS subscription_code text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS owner_pin text;
 ALTER TABLE public.elanati_ads ADD COLUMN IF NOT EXISTS priority_rank integer NOT NULL DEFAULT 0;
@@ -175,6 +184,8 @@ CREATE INDEX IF NOT EXISTS idx_elanati_ads_expires ON public.elanati_ads (expire
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_contact ON public.elanati_ads (contact);
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_category ON public.elanati_ads (category);
 CREATE INDEX IF NOT EXISTS idx_elanati_ads_city ON public.elanati_ads (city);
+CREATE INDEX IF NOT EXISTS idx_elanati_ads_free_ip_created ON public.elanati_ads (ip_hash, created_at DESC) WHERE package_name = 'مجاني' AND status <> 'rejected' AND ip_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_elanati_ads_free_device_created ON public.elanati_ads (device_hash, created_at DESC) WHERE package_name = 'مجاني' AND status <> 'rejected' AND device_hash IS NOT NULL;
 
 -- 3) جدول رسائل التواصل وتذاكر العملاء
 CREATE TABLE IF NOT EXISTS public.elanati_contact_messages (
@@ -582,7 +593,8 @@ BEGIN
   FROM (
     SELECT
       id, title, category, description, contact, city, image, image_url,
-      extra_images, banner_url, package_name, subscription_code,
+      extra_images, banner_url, price, price_negotiable, item_condition, specs,
+      latitude, longitude, location_address, package_name, subscription_code,
       priority_rank, status, featured, views_count, client_edits_count,
       last_client_edited_at, starts_at, expires_at, created_at
     FROM public.elanati_ads
@@ -619,6 +631,9 @@ END;
 $$;
 
 -- تعديل الإعلان بواسطة المعلن (يتطلب كود الإعلان السري أو كود الاشتراك المدفوع — مرة واحدة فقط)
+DROP FUNCTION IF EXISTS public.edit_elanati_ad_by_client(uuid, text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS public.edit_elanati_ad_by_client(uuid, text, text, text, text, text, text, text, numeric, boolean, text, jsonb, double precision, double precision, text, jsonb);
+
 CREATE OR REPLACE FUNCTION public.edit_elanati_ad_by_client(
   p_ad_id uuid,
   p_query text,
@@ -627,7 +642,15 @@ CREATE OR REPLACE FUNCTION public.edit_elanati_ad_by_client(
   p_city text,
   p_description text,
   p_image text DEFAULT NULL,
-  p_image_url text DEFAULT NULL
+  p_image_url text DEFAULT NULL,
+  p_price numeric DEFAULT NULL,
+  p_price_negotiable boolean DEFAULT NULL,
+  p_item_condition text DEFAULT NULL,
+  p_specs jsonb DEFAULT NULL,
+  p_latitude double precision DEFAULT NULL,
+  p_longitude double precision DEFAULT NULL,
+  p_location_address text DEFAULT NULL,
+  p_extra_images jsonb DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -641,6 +664,10 @@ DECLARE
   v_clean_cat text := regexp_replace(trim(COALESCE(p_category, '')), '\s+', ' ', 'g');
   v_clean_img text := NULLIF(trim(COALESCE(p_image_url, '')), '');
   v_owns boolean := false;
+  v_is_paid boolean := false;
+  v_sanitized_extras jsonb := NULL;
+  v_elem text;
+  v_cond text;
 BEGIN
   IF v_clean_query = '' OR length(v_clean_query) < 5 THEN
     RAISE EXCEPTION 'يرجى إدخال كود تعديل الإعلان أو كود الاشتراك للتحقق من الملكية';
@@ -692,6 +719,23 @@ BEGIN
     RAISE EXCEPTION 'رابط الصورة يجب أن يبدأ بـ https:// أو http://';
   END IF;
 
+  v_is_paid := COALESCE(v_ad.package_name, 'مجاني') <> 'مجاني';
+  IF p_extra_images IS NOT NULL THEN
+    v_sanitized_extras := '[]'::jsonb;
+    IF v_is_paid AND jsonb_typeof(p_extra_images) = 'array' THEN
+      FOR v_elem IN SELECT value FROM jsonb_array_elements_text(p_extra_images) LIMIT 5 LOOP
+        IF trim(v_elem) ~* '^https?://' THEN
+          v_sanitized_extras := v_sanitized_extras || to_jsonb(trim(v_elem));
+        END IF;
+      END LOOP;
+    END IF;
+  END IF;
+
+  v_cond := CASE
+    WHEN p_item_condition IN ('new', 'used', 'unspecified') THEN p_item_condition
+    ELSE v_ad.item_condition
+  END;
+
   INSERT INTO public.elanati_categories (name, sort_order, is_active)
   VALUES (v_clean_cat, 20, true)
   ON CONFLICT (name) DO UPDATE SET is_active = true;
@@ -703,6 +747,14 @@ BEGIN
       description = trim(p_description),
       image = COALESCE(NULLIF(trim(COALESCE(p_image, '')), ''), v_ad.image),
       image_url = v_clean_img,
+      extra_images = COALESCE(v_sanitized_extras, v_ad.extra_images),
+      price = CASE WHEN p_price IS NOT NULL AND p_price >= 0 THEN p_price ELSE NULL END,
+      price_negotiable = COALESCE(p_price_negotiable, v_ad.price_negotiable),
+      item_condition = COALESCE(v_cond, 'unspecified'),
+      specs = CASE WHEN p_specs IS NOT NULL AND jsonb_typeof(p_specs) = 'object' THEN p_specs ELSE v_ad.specs END,
+      latitude = CASE WHEN p_latitude IS NOT NULL AND p_latitude BETWEEN -90 AND 90 THEN p_latitude ELSE NULL END,
+      longitude = CASE WHEN p_longitude IS NOT NULL AND p_longitude BETWEEN -180 AND 180 THEN p_longitude ELSE NULL END,
+      location_address = NULLIF(left(trim(COALESCE(p_location_address, '')), 200), ''),
       client_edits_count = COALESCE(v_ad.client_edits_count, 0) + 1,
       last_client_edited_at = now(),
       updated_at = now()
@@ -720,6 +772,13 @@ BEGIN
     'image_url', v_updated.image_url,
     'extra_images', v_updated.extra_images,
     'banner_url', v_updated.banner_url,
+    'price', v_updated.price,
+    'price_negotiable', v_updated.price_negotiable,
+    'item_condition', v_updated.item_condition,
+    'specs', v_updated.specs,
+    'latitude', v_updated.latitude,
+    'longitude', v_updated.longitude,
+    'location_address', v_updated.location_address,
     'package_name', v_updated.package_name,
     'priority_rank', v_updated.priority_rank,
     'status', v_updated.status,
@@ -734,7 +793,7 @@ BEGIN
 END;
 $$;
 
--- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد (الباقة المدفوعة تتطلب كود الاشتراك والمجانية مرة واحدة فقط)
+-- فحص حصة الإعلانات المسموحة للعميل قبل نشر إعلان جديد (المجاني مرة كل 30 يوماً لكل رقم/اسم/بصمة IP أو جهاز، صورة واحدة مجانية وحتى 6 صور للمدفوع)
 DROP FUNCTION IF EXISTS public.check_elanati_ad_allowance(text, text);
 DROP FUNCTION IF EXISTS public.check_elanati_ad_allowance(text, text, text);
 
@@ -759,6 +818,7 @@ DECLARE
   v_free_used_name boolean := false;
   v_free_days integer := 7;
   v_pro_days integer := 30;
+  v_window_start timestamptz := now() - interval '30 days';
 BEGIN
   SELECT free_ad_days, pro_ad_days
   INTO v_free_days, v_pro_days
@@ -801,19 +861,22 @@ BEGIN
       'featured', true,
       'priority_rank', CASE WHEN v_sub.package_name = 'المؤسسي' THEN 2 ELSE 1 END,
       'allow_extra_images', true,
+      'max_images', 6,
       'allow_banner', v_sub.package_name = 'المؤسسي',
       'free_trial_used', false,
-      'free_block_reason', NULL
+      'free_block_reason', NULL,
+      'cooldown_days', 30
     );
   END IF;
 
-  -- الباقة المجانية مرة واحدة فقط طوال الوقت لكل رقم موبايل أو اسم معلن (حتى لو انتهى الإعلان السابق أو تمت أرشفته)
+  -- الباقة المجانية إعلان واحد مجاني كل 30 يوماً لكل رقم موبايل أو اسم معلن (بالإضافة لفحص IP وبصمة الجهاز على الخادم)
   IF v_digits <> '' THEN
     SELECT EXISTS (
       SELECT 1
       FROM public.elanati_ads a
       WHERE a.package_name = 'مجاني'
         AND a.status <> 'rejected'
+        AND a.created_at >= v_window_start
         AND regexp_replace(a.contact, '\D', '', 'g') = v_digits
     ) INTO v_free_used_phone;
   END IF;
@@ -824,6 +887,7 @@ BEGIN
       FROM public.elanati_ads a
       WHERE a.package_name = 'مجاني'
         AND a.status <> 'rejected'
+        AND a.created_at >= v_window_start
         AND lower(regexp_replace(trim(COALESCE(a.client_name, '')), '\s+', ' ', 'g')) = v_client_name
     ) INTO v_free_used_name;
   END IF;
@@ -839,6 +903,7 @@ BEGIN
     'featured', false,
     'priority_rank', 0,
     'allow_extra_images', false,
+    'max_images', 1,
     'allow_banner', false,
     'free_trial_used', (v_free_used_phone OR v_free_used_name),
     'free_block_reason', CASE
@@ -846,12 +911,13 @@ BEGIN
       WHEN v_free_used_phone THEN 'phone'
       WHEN v_free_used_name THEN 'name'
       ELSE NULL
-    END
+    END,
+    'cooldown_days', 30
   );
 END;
 $$;
 
--- حماية شاملة على مستوى قاعدة البيانات عند إضافة إعلان جديد (الحالة، الباقة، المدة، الصور، ومنع تكرار المجاني)
+-- حماية شاملة على مستوى قاعدة البيانات عند إضافة إعلان جديد (الحالة، الباقة، المدة، الصور حتى 6 للمدفوع، ومنع تكرار المجاني خلال 30 يوم)
 CREATE OR REPLACE FUNCTION public.enforce_elanati_ad_submission()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -869,6 +935,7 @@ DECLARE
   v_active_ads integer := 0;
   v_sanitized_extras jsonb := '[]'::jsonb;
   v_elem text;
+  v_window_start timestamptz := now() - interval '30 days';
 BEGIN
   IF length(trim(COALESCE(NEW.owner_pin, ''))) < 6 THEN
     NEW.owner_pin := upper(encode(gen_random_bytes(4), 'hex'));
@@ -882,6 +949,26 @@ BEGIN
 
   IF NEW.banner_url IS NOT NULL AND trim(NEW.banner_url) <> '' AND trim(NEW.banner_url) !~* '^https?://' THEN
     NEW.banner_url := NULL;
+  END IF;
+
+  IF NEW.item_condition IS NULL OR NEW.item_condition NOT IN ('new', 'used', 'unspecified') THEN
+    NEW.item_condition := 'unspecified';
+  END IF;
+
+  IF NEW.price IS NOT NULL AND NEW.price < 0 THEN
+    NEW.price := NULL;
+  END IF;
+
+  IF NEW.latitude IS NOT NULL AND (NEW.latitude < -90 OR NEW.latitude > 90) THEN
+    NEW.latitude := NULL;
+  END IF;
+
+  IF NEW.longitude IS NOT NULL AND (NEW.longitude < -180 OR NEW.longitude > 180) THEN
+    NEW.longitude := NULL;
+  END IF;
+
+  IF NEW.specs IS NULL OR jsonb_typeof(NEW.specs) <> 'object' THEN
+    NEW.specs := '{}'::jsonb;
   END IF;
 
   IF public.is_elanati_admin() THEN
@@ -942,8 +1029,9 @@ BEGIN
       NEW.banner_url := NULL;
     END IF;
 
+    -- السماح حتى 5 صور إضافية + الصورة الرئيسية = 6 صور إجمالاً للباقات المدفوعة
     IF jsonb_typeof(COALESCE(NEW.extra_images, '[]'::jsonb)) = 'array' THEN
-      FOR v_elem IN SELECT value FROM jsonb_array_elements_text(COALESCE(NEW.extra_images, '[]'::jsonb)) LIMIT 4 LOOP
+      FOR v_elem IN SELECT value FROM jsonb_array_elements_text(COALESCE(NEW.extra_images, '[]'::jsonb)) LIMIT 5 LOOP
         IF trim(v_elem) ~* '^https?://' THEN
           v_sanitized_extras := v_sanitized_extras || to_jsonb(trim(v_elem));
         END IF;
@@ -956,9 +1044,10 @@ BEGIN
       FROM public.elanati_ads a
       WHERE a.package_name = 'مجاني'
         AND a.status <> 'rejected'
+        AND a.created_at >= v_window_start
         AND regexp_replace(a.contact, '\D', '', 'g') = v_digits
     ) THEN
-      RAISE EXCEPTION 'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم. الباقة المجانية متاحة لمرة واحدة فقط، يرجى الترقية إلى إحدى الباقات المدفوعة.';
+      RAISE EXCEPTION 'تم استخدام الإعلان المجاني لهذا الرقم خلال آخر 30 يوماً. يمكنك الترقية إلى إحدى الباقات المدفوعة لنشر إعلانات إضافية.';
     END IF;
 
     IF v_client_name <> '' AND EXISTS (
@@ -966,9 +1055,32 @@ BEGIN
       FROM public.elanati_ads a
       WHERE a.package_name = 'مجاني'
         AND a.status <> 'rejected'
+        AND a.created_at >= v_window_start
         AND lower(regexp_replace(trim(COALESCE(a.client_name, '')), '\s+', ' ', 'g')) = v_client_name
     ) THEN
-      RAISE EXCEPTION 'اسم المعلن هذا استخدم الإعلان المجاني مسبقاً. الباقة المجانية متاحة لمرة واحدة فقط، يرجى الترقية إلى إحدى الباقات المدفوعة.';
+      RAISE EXCEPTION 'اسم المعلن هذا استخدم الإعلان المجاني خلال آخر 30 يوماً. يرجى الترقية إلى إحدى الباقات المدفوعة.';
+    END IF;
+
+    IF NEW.ip_hash IS NOT NULL AND trim(NEW.ip_hash) <> '' AND EXISTS (
+      SELECT 1
+      FROM public.elanati_ads a
+      WHERE a.package_name = 'مجاني'
+        AND a.status <> 'rejected'
+        AND a.created_at >= v_window_start
+        AND a.ip_hash = NEW.ip_hash
+    ) THEN
+      RAISE EXCEPTION 'تم رصد إعلان مجاني مسبقاً من نفس الشبكة/الجهاز خلال آخر 30 يوماً. يرجى الترقية لإضافة إعلان جديد.';
+    END IF;
+
+    IF NEW.device_hash IS NOT NULL AND trim(NEW.device_hash) <> '' AND EXISTS (
+      SELECT 1
+      FROM public.elanati_ads a
+      WHERE a.package_name = 'مجاني'
+        AND a.status <> 'rejected'
+        AND a.created_at >= v_window_start
+        AND a.device_hash = NEW.device_hash
+    ) THEN
+      RAISE EXCEPTION 'تم رصد إعلان مجاني مسبقاً من نفس الجهاز خلال آخر 30 يوماً. يرجى الترقية لإضافة إعلان جديد.';
     END IF;
 
     NEW.package_name := 'مجاني';
@@ -1420,9 +1532,18 @@ CREATE POLICY "Admins can manage categories"
 
 INSERT INTO public.elanati_categories (name, sort_order, is_active)
 VALUES
-  ('توزيع', 1, true),
-  ('تجارة', 2, true),
-  ('محلات', 3, true)
+  ('إعلانات شخصية', 1, true),
+  ('إعلانات تجارية', 2, true),
+  ('سيارات', 3, true),
+  ('عقارات', 4, true),
+  ('توزيع', 5, true),
+  ('تجارة', 6, true),
+  ('محلات', 7, true),
+  ('إلكترونيات وموبايلات', 8, true),
+  ('أجهزة منزلية وأثاث', 9, true),
+  ('وظائف', 10, true),
+  ('خدمات ومقاولات', 11, true),
+  ('تعليم وتدريب', 12, true)
 ON CONFLICT (name) DO NOTHING;
 
 -- دوال إدارية محصورة لمدير المنصة الموثق فقط (قراءة الإعلانات الكاملة وإحصائيات الشريط الجانبي)
@@ -1457,6 +1578,8 @@ DECLARE
   v_open_tickets integer := 0;
   v_pending_packages integer := 0;
   v_pending_otps integer := 0;
+  v_open_reports integer := 0;
+  v_blocked_attempts integer := 0;
 BEGIN
   IF NOT public.is_elanati_admin() THEN
     RAISE EXCEPTION 'غير مصرح بالوصول إلى إحصائيات مدير المنصة';
@@ -1481,11 +1604,22 @@ BEGIN
     AND expires_at > now()
     AND manual_otp_code IS NOT NULL;
 
+  SELECT COUNT(*) INTO v_open_reports
+  FROM public.elanati_ad_reports
+  WHERE status = 'open';
+
+  SELECT COUNT(*) INTO v_blocked_attempts
+  FROM public.elanati_access_logs
+  WHERE event_type = 'ad_submit_blocked'
+    AND created_at >= now() - interval '24 hours';
+
   RETURN jsonb_build_object(
     'pending_ads', v_pending_ads,
     'open_tickets', v_open_tickets,
     'pending_packages', v_pending_packages,
-    'pending_otps', v_pending_otps
+    'pending_otps', v_pending_otps,
+    'open_reports', v_open_reports,
+    'blocked_attempts', v_blocked_attempts
   );
 END;
 $$;
@@ -1566,39 +1700,196 @@ CREATE POLICY "Admins can manage push subscriptions"
   WITH CHECK (public.is_elanati_admin());
 
 -- ============================================================================
+-- 13) سجل الدخول والأمان، بلاغات الإعلانات، وتخزين صور الإعلانات (Supabase Storage)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.elanati_access_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_type text NOT NULL CHECK (
+    event_type IN (
+      'admin_login_success',
+      'admin_login_failed',
+      'ad_submit_ok',
+      'ad_submit_blocked',
+      'otp_request',
+      'ad_report'
+    )
+  ),
+  actor_label text,
+  ip_hint text,
+  ip_hash text,
+  device_hash text,
+  reason text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_elanati_access_logs_created
+  ON public.elanati_access_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_elanati_access_logs_type_created
+  ON public.elanati_access_logs (event_type, created_at DESC);
+
+ALTER TABLE public.elanati_access_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can view access logs" ON public.elanati_access_logs;
+CREATE POLICY "Admins can view access logs"
+  ON public.elanati_access_logs FOR SELECT
+  TO authenticated
+  USING (public.is_elanati_admin());
+
+DROP POLICY IF EXISTS "Admins can delete access logs" ON public.elanati_access_logs;
+CREATE POLICY "Admins can delete access logs"
+  ON public.elanati_access_logs FOR DELETE
+  TO authenticated
+  USING (public.is_elanati_admin());
+
+-- تسجيل محاولات الدخول الإدارية بشكل آمن حتى في حال فشل المصادقة
+CREATE OR REPLACE FUNCTION public.log_elanati_admin_login_attempt(
+  p_email text,
+  p_success boolean,
+  p_reason text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_clean_email text := left(lower(trim(COALESCE(p_email, ''))), 120);
+  v_masked text;
+BEGIN
+  IF v_clean_email = '' THEN
+    RETURN;
+  END IF;
+
+  IF p_success AND NOT public.is_elanati_admin() THEN
+    RETURN;
+  END IF;
+
+  v_masked := regexp_replace(v_clean_email, '(^.).*(@.*$)', '\1***\2');
+
+  INSERT INTO public.elanati_access_logs (
+    event_type,
+    actor_label,
+    reason,
+    metadata
+  )
+  VALUES (
+    CASE WHEN p_success THEN 'admin_login_success' ELSE 'admin_login_failed' END,
+    v_masked,
+    left(trim(COALESCE(p_reason, '')), 200),
+    jsonb_build_object('source', 'client_auth')
+  );
+END;
+$$;
+
+CREATE TABLE IF NOT EXISTS public.elanati_ad_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ad_id uuid REFERENCES public.elanati_ads(id) ON DELETE CASCADE,
+  ad_title text NOT NULL,
+  reason text NOT NULL,
+  details text,
+  reporter_phone text,
+  reporter_ip_hash text,
+  status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'reviewed', 'dismissed')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_elanati_ad_reports_status_created
+  ON public.elanati_ad_reports (status, created_at DESC);
+
+ALTER TABLE public.elanati_ad_reports ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can submit ad reports" ON public.elanati_ad_reports;
+CREATE POLICY "Public can submit ad reports"
+  ON public.elanati_ad_reports FOR INSERT
+  WITH CHECK (
+    public.is_elanati_admin()
+    OR (
+      status = 'open'
+      AND reporter_ip_hash IS NULL
+      AND length(trim(ad_title)) BETWEEN 2 AND 200
+      AND length(trim(reason)) BETWEEN 2 AND 200
+    )
+  );
+
+DROP POLICY IF EXISTS "Admins can manage ad reports" ON public.elanati_ad_reports;
+CREATE POLICY "Admins can manage ad reports"
+  ON public.elanati_ad_reports FOR ALL
+  TO authenticated
+  USING (public.is_elanati_admin())
+  WITH CHECK (public.is_elanati_admin());
+
+-- حاوية تخزين صور الإعلانات (JPG / PNG / WebP فقط — حد أقصى 5 ميجابايت)
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'elanati-ad-images',
+  'elanati-ad-images',
+  true,
+  5242880,
+  ARRAY['image/jpeg', 'image/png', 'image/webp']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = 5242880,
+  allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp'];
+
+DROP POLICY IF EXISTS "Public read ad images" ON storage.objects;
+CREATE POLICY "Public read ad images"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'elanati-ad-images');
+
+DROP POLICY IF EXISTS "Public upload ad images" ON storage.objects;
+CREATE POLICY "Public upload ad images"
+  ON storage.objects FOR INSERT
+  WITH CHECK (
+    bucket_id = 'elanati-ad-images'
+    AND name LIKE 'ads/%'
+  );
+
+DROP POLICY IF EXISTS "Admins manage ad images" ON storage.objects;
+CREATE POLICY "Admins manage ad images"
+  ON storage.objects FOR DELETE
+  TO authenticated
+  USING (bucket_id = 'elanati-ad-images' AND public.is_elanati_admin());
+
+-- ============================================================================
 -- صلاحيات الوصول والتحديث اللحظي
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 
--- جدول مديري المنصة وجداول الأتمتة ورموز OTP وجلسات البوابة ومفاتيح Web Push: حظر تام على الزوار
-REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_portal_sessions, public.elanati_push_vapid_keys, public.elanati_admin_push_subscriptions FROM anon, authenticated;
+-- جدول مديري المنصة وجداول الأتمتة ورموز OTP وجلسات البوابة ومفاتيح Web Push وسجل الأمان: حظر تام على الزوار
+REVOKE ALL ON public.elanati_admins, public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_portal_sessions, public.elanati_push_vapid_keys, public.elanati_admin_push_subscriptions, public.elanati_access_logs FROM anon, authenticated;
 GRANT SELECT ON public.elanati_admins TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_automation_config, public.elanati_whatsapp_logs, public.elanati_portal_otps, public.elanati_admin_push_subscriptions TO authenticated;
+GRANT SELECT, DELETE ON public.elanati_access_logs TO authenticated;
 
--- جدول الإعلانات: استعلامات العامة والمستخدمين العاديين تقتصر على الأعمدة العامة الآمنة فقط
+-- جدول الإعلانات: استعلامات العامة والمستخدمين العاديين تقتصر على الأعمدة العامة الآمنة فقط (بدون ip_hash أو device_hash أو owner_pin)
 REVOKE ALL ON public.elanati_ads FROM anon, authenticated;
 GRANT SELECT (
   id, title, category, description, contact, whatsapp, city, image,
-  image_url, extra_images, banner_url, package_name, priority_rank,
-  status, featured, views_count, starts_at, expires_at, created_at, updated_at
+  image_url, extra_images, banner_url, price, price_negotiable,
+  item_condition, specs, latitude, longitude, location_address,
+  package_name, priority_rank, status, featured, views_count,
+  starts_at, expires_at, created_at, updated_at
 ) ON public.elanati_ads TO anon, authenticated;
 GRANT INSERT ON public.elanati_ads TO anon, authenticated;
 GRANT UPDATE, DELETE ON public.elanati_ads TO authenticated;
 
 GRANT SELECT ON public.elanati_site_settings, public.elanati_packages, public.elanati_testimonials, public.elanati_categories TO anon, authenticated;
-REVOKE ALL ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests FROM anon;
-GRANT INSERT ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_categories TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_categories TO authenticated;
+REVOKE ALL ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_ad_reports FROM anon;
+GRANT INSERT ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_categories, public.elanati_ad_reports TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.elanati_contact_messages, public.elanati_support_messages, public.elanati_package_requests, public.elanati_packages, public.elanati_testimonials, public.elanati_site_settings, public.elanati_categories, public.elanati_ad_reports TO authenticated;
 
 GRANT EXECUTE ON FUNCTION public.increment_elanati_ad_views(uuid) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_by_code(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_ticket_messages(text) TO anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.get_elanati_client_portal(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_elanati_client_portal(text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.edit_elanati_ad_by_client(uuid, text, text, text, text, text, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.edit_elanati_ad_by_client(uuid, text, text, text, text, text, text, text, numeric, boolean, text, jsonb, double precision, double precision, text, jsonb) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_elanati_ad_allowance(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_elanati_public_templates() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.send_elanati_internal_auto_reply(text, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.log_elanati_admin_login_attempt(text, boolean, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_expired_elanati_ads() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.is_elanati_admin() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_elanati_admin_session() TO authenticated;
@@ -1634,6 +1925,14 @@ BEGIN
     END;
     BEGIN
       ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_portal_otps;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_access_logs;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.elanati_ad_reports;
     EXCEPTION WHEN duplicate_object THEN NULL;
     END;
   END IF;

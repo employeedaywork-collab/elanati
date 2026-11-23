@@ -6,7 +6,7 @@ import Stats from '../components/Stats';
 import Testimonials from '../components/Testimonials';
 import { usePublicContext } from '../components/PublicLayout';
 import { INITIAL_TESTIMONIALS } from '../data/seedData';
-import { sanitizeHttpUrl } from '../lib/supabase';
+import { sanitizeAdImageUrl } from '../lib/supabase';
 import { fetchTestimonials } from '../services/dataService';
 import { Testimonial } from '../types';
 
@@ -133,7 +133,7 @@ export default function HomePage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {topAds.map((ad) => {
-                const safeThumb = sanitizeHttpUrl(ad.image_url);
+                const safeThumb = sanitizeAdImageUrl(ad.image_url);
                 const isEnterprise = ad.package_name === 'المؤسسي' || ad.priority_rank === 2;
                 return (
                   <article
@@ -142,7 +142,7 @@ export default function HomePage() {
                   >
                     <div>
                       {safeThumb && (
-                        <div className="mb-4 h-36 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
+                        <div className="mb-4 aspect-[4/3] rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
                           <img
                             src={safeThumb}
                             alt={ad.title}
@@ -173,9 +173,14 @@ export default function HomePage() {
                       <p className="text-xs font-bold text-blue-700 mb-1">
                         {ad.category} · {ad.city}
                       </p>
-                      <h3 className="text-base font-extrabold text-slate-900 mb-1.5 line-clamp-1">
+                      <h3 className="text-base font-extrabold text-slate-900 mb-1 line-clamp-1">
                         {ad.title}
                       </h3>
+                      {typeof ad.price === 'number' && (
+                        <p className="text-sm font-extrabold text-emerald-700 mb-1 tabular-nums">
+                          {ad.price.toLocaleString('en-US')} ج.م
+                        </p>
+                      )}
                       <p className="text-xs text-slate-600 line-clamp-2">{ad.description}</p>
                     </div>
 

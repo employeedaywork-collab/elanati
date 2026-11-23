@@ -1,6 +1,54 @@
 import { Ad, AutomationConfig, PackagePlan, SiteSettings, Testimonial } from '../types';
 
-export const DEFAULT_CATEGORIES: string[] = ['توزيع', 'تجارة', 'محلات'];
+export const DEFAULT_CATEGORIES: string[] = [
+  'إعلانات شخصية',
+  'إعلانات تجارية',
+  'سيارات',
+  'عقارات',
+  'توزيع',
+  'تجارة',
+  'محلات',
+  'إلكترونيات وموبايلات',
+  'أجهزة منزلية وأثاث',
+  'وظائف',
+  'خدمات ومقاولات',
+  'تعليم وتدريب',
+];
+
+export type CategoryGroup = 'cars' | 'real_estate' | 'commercial' | 'jobs' | 'general';
+
+export function getCategoryGroup(category: string): CategoryGroup {
+  const c = (category || '').trim();
+  if (/(سيار|موتوسيك|مركب|نقل)/i.test(c)) return 'cars';
+  if (/(عقار|شقق|شقة|فيل|أرض|ارض|مكاتب|إيجار|تمليك)/i.test(c)) return 'real_estate';
+  if (/(تجار|توزيع|محلات|محل|جملة|توريد|مصنع|مستورد)/i.test(c)) return 'commercial';
+  if (/(وظيف|وظائف|توظيف|عمل)/i.test(c)) return 'jobs';
+  return 'general';
+}
+
+export const SPEC_LABELS: Record<string, string> = {
+  brand_model: 'الماركة والموديل',
+  year: 'سنة الصنع',
+  mileage_km: 'المسافة المقطوعة (كم)',
+  transmission: 'ناقل الحركة',
+  fuel: 'نوع الوقود',
+  property_type: 'نوع العقار',
+  deal_type: 'الغرض',
+  area_sqm: 'المساحة (م²)',
+  rooms: 'عدد الغرف',
+  floor: 'الدور',
+  trade_type: 'نوع التعامل',
+  min_order: 'الحد الأدنى للطلب',
+  job_type: 'نظام العمل',
+  experience: 'الخبرة المطلوبة',
+  delivery_available: 'توصيل / شحن',
+};
+
+export const ITEM_CONDITION_LABELS: Record<'new' | 'used' | 'unspecified', string> = {
+  new: 'جديد',
+  used: 'مستعمل',
+  unspecified: 'غير محدد',
+};
 
 export const EGYPT_GOVERNORATES: string[] = [
   'القاهرة',
@@ -199,6 +247,72 @@ export const INITIAL_ADS: Ad[] = [
     starts_at: daysAgo(3),
     expires_at: daysFromNow(4),
     created_at: daysAgo(3),
+  },
+  {
+    id: 'ad-7',
+    client_name: 'كريم عبد الله',
+    title: 'تويوتا كورولا 2021 فابريكا بالكامل',
+    category: 'سيارات',
+    description: 'سيارة تويوتا كورولا موديل 2021 أعلى فئة بحالة ممتازة وصيانات توكيل منتظمة بدون رش نهائياً',
+    contact: '01023456789',
+    whatsapp: '201023456789',
+    city: 'القاهرة',
+    image: '🚗',
+    price: 980000,
+    price_negotiable: true,
+    item_condition: 'used',
+    specs: {
+      brand_model: 'تويوتا كورولا',
+      year: '2021',
+      mileage_km: '62000',
+      transmission: 'أوتوماتيك',
+      fuel: 'بنزين',
+    },
+    latitude: 30.0626,
+    longitude: 31.3456,
+    location_address: 'مدينة نصر، القاهرة',
+    extra_images: [],
+    package_name: 'الاحترافي',
+    priority_rank: 1,
+    status: 'approved',
+    featured: true,
+    views_count: 95,
+    starts_at: daysAgo(1),
+    expires_at: daysFromNow(29),
+    created_at: daysAgo(1),
+  },
+  {
+    id: 'ad-8',
+    client_name: 'شركة الرواد العقارية',
+    title: 'شقة 165م تشطيب سوبر لوكس بالتجمع الخامس',
+    category: 'عقارات',
+    description: 'شقة 3 غرف و2 حمام وريسبشن 3 قطع بالدور الثالث، فيو مفتوح قريبة من الخدمات والمحاور الرئيسية',
+    contact: '01119876543',
+    whatsapp: '201119876543',
+    city: 'القاهرة',
+    image: '🏠',
+    price: 4200000,
+    price_negotiable: false,
+    item_condition: 'new',
+    specs: {
+      property_type: 'شقة',
+      deal_type: 'للبيع',
+      area_sqm: '165',
+      rooms: '3',
+      floor: '3',
+    },
+    latitude: 30.0171,
+    longitude: 31.4307,
+    location_address: 'التجمع الخامس، القاهرة الجديدة',
+    extra_images: [],
+    package_name: 'الاحترافي',
+    priority_rank: 1,
+    status: 'approved',
+    featured: true,
+    views_count: 118,
+    starts_at: daysAgo(2),
+    expires_at: daysFromNow(28),
+    created_at: daysAgo(2),
   },
 ];
 

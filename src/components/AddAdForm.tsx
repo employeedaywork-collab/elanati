@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ImagePlus, PlusCircle, Sparkles, X } from 'lucide-react';
+import { CheckCircle2, PlusCircle, Sparkles, X } from 'lucide-react';
 import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../data/seedData';
 import { checkAdAllowance } from '../services/dataService';
-import { AdAllowance, AdCategory, SiteSettings } from '../types';
+import { AdAllowance, AdCategory, AdSpecs, ItemCondition, SiteSettings } from '../types';
+import AdImageUploader from './AdImageUploader';
+import CategorySpecsFields from './CategorySpecsFields';
+import GoogleMapLocationPicker from './GoogleMapLocationPicker';
 
 const CUSTOM_CATEGORY_VALUE = '__custom__';
 
@@ -20,6 +23,13 @@ interface AddAdFormProps {
     image_url?: string;
     extra_images?: string[];
     banner_url?: string;
+    price?: number | null;
+    price_negotiable?: boolean;
+    item_condition?: ItemCondition;
+    specs?: AdSpecs | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    location_address?: string | null;
     subscription_code?: string;
   }) => Promise<{ requiresReview: boolean; ownerPin?: string }>;
   onClose: () => void;
@@ -49,15 +59,22 @@ export default function AddAdForm({
     return {
       client_name: savedName,
       title: '',
-      category: (categories[0] || 'توزيع') as AdCategory,
+      category: (categories[0] || 'إعلانات شخصية') as AdCategory,
       custom_category: '',
       description: '',
       contact: savedPhone,
       city: '',
       image: '📦',
       image_url: '',
-      extra_images: ['', '', ''],
+      extra_images: [] as string[],
       banner_url: '',
+      price: '',
+      price_negotiable: false,
+      item_condition: 'unspecified' as ItemCondition,
+      specs: {} as AdSpecs,
+      latitude: null as number | null,
+      longitude: null as number | null,
+      location_address: '',
       subscription_code: savedSubCode,
     };
   });
@@ -72,7 +89,7 @@ export default function AddAdForm({
   } | null>(null);
   const [copiedPin, setCopiedPin] = useState(false);
 
-  const emojis = ['📦', '💻', '👔', '💄', '🪑', '🏗️', '🍕', '🚗', '📱', '🏠', '💊', '🎁'];
+  const emojis = ['📦', '🚗', '🏠', '💻', '👔', '💄', '🪑', '🏗️', '🍕', '📱', '💊', '🎁'];
 
   useEffect(() => {
     const cleanPhone = formData.contact.replace(/\D/g, '');
@@ -94,6 +111,13 @@ export default function AddAdForm({
     return () => clearTimeout(timer);
   }, [formData.contact, formData.subscription_code, formData.client_name]);
 
+  const resolvedCategory =
+    formData.category === CUSTOM_CATEGORY_VALUE
+      ? formData.custom_category.trim().replace(/\s+/g, ' ')
+      : formData.category.trim();
+
+  const maxImages = allowance?.max_images ?? (allowance?.allow_extra_images ? 6 : 1);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -105,14 +129,16 @@ export default function AddAdForm({
       setError('يرجى إدخال رقم هاتف مصري صحيح (11 رقم)');
       return;
     }
-    const resolvedCategory =
-      formData.category === CUSTOM_CATEGORY_VALUE
-        ? formData.custom_category.trim().replace(/\s+/g, ' ')
-        : formData.category.trim();
     if (resolvedCategory.length < 2) {
       setError('يرجى كتابة اسم التصنيف الجديد (حرفين على الأقل)');
       return;
     }
+
+    const parsedPrice =
+      formData.price.trim() !== '' && Number.isFinite(Number(formData.price))
+        ? Math.max(0, Number(formData.price))
+        : null;
+
     setSubmitting(true);
     try {
       const result = await onSubmit({
@@ -124,8 +150,15 @@ export default function AddAdForm({
         city: formData.city,
         image: formData.image,
         image_url: formData.image_url,
-        extra_images: formData.extra_images.filter((u) => u.trim()),
+        extra_images: maxImages > 1 ? formData.extra_images.filter((u) => u.trim()) : [],
         banner_url: formData.banner_url,
+        price: parsedPrice,
+        price_negotiable: formData.price_negotiable,
+        item_condition: formData.item_condition,
+        specs: formData.specs,
+        latitude: formData.latitude,
+        longitude: formData.longitude,
+        location_address: formData.location_address.trim() || null,
         subscription_code: formData.subscription_code || undefined,
       });
       try {
@@ -152,7 +185,7 @@ export default function AddAdForm({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-slate-950/65 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
+      <div className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200">
         <div className="sticky top-0 bg-white rounded-t-3xl border-b border-slate-100 px-6 py-4 flex justify-between items-center z-10">
           <h2 className="text-xl font-extrabold text-slate-900">إضافة إعلان جديد</h2>
           <button
@@ -174,7 +207,7 @@ export default function AddAdForm({
             <p className="text-slate-600 text-sm leading-relaxed">
               {doneState.requiresReview
                 ? `تم إرسال إعلانك للمراجعة وسيتم اعتماده ونشره للزوار خلال دقائق. الإعلانات المجانية تظهر لمدة ${settings.free_ad_days || 7} أيام وتختفي تلقائياً بعد انتهاء المدة.`
-                : 'إعلانك ظاهر الآن في قائمة الإعلانات المتاحة لجميع الموزعين والتجار.'}
+                : 'إعلانك ظاهر الآن في قائمة الإعلانات المتاحة لجميع الزوار والمشترين.'}
             </p>
             {doneState.ownerPin && (
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-center">
@@ -231,20 +264,22 @@ export default function AddAdForm({
                   </p>
                   <p>
                     {allowance.is_permanent
-                      ? 'ظهور دائم + أولوية قصوى + بانر إعلاني + صور إضافية.'
+                      ? 'ظهور دائم + أولوية قصوى + بانر إعلاني + حتى 6 صور.'
                       : `مدة ظهور الإعلان: ${allowance.duration_days} يوماً${
-                          allowance.featured ? ' + تمييز نجمي + صور إضافية' : ' ثم يختفي تلقائياً'
+                          allowance.featured ? ' + تمييز نجمي + حتى 6 صور' : ' + صورة واحدة ثم يختفي تلقائياً'
                         }.`}
                   </p>
                   {!allowance.allowed && (
                     <div className="pt-1.5 flex items-center justify-between gap-2 text-red-700 font-bold">
                       <span>
                         {allowance.package_name === 'مجاني' && allowance.free_trial_used
-                          ? allowance.free_block_reason === 'both'
-                            ? 'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم واسم المعلن (المجاني مرة واحدة فقط).'
+                          ? allowance.free_block_reason === 'ip_device'
+                            ? 'تم رصد نشر إعلان مجاني من نفس الشبكة أو الجهاز خلال آخر 30 يوماً (المجاني مرة واحدة كل 30 يوم).'
+                            : allowance.free_block_reason === 'both'
+                            ? 'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم واسم المعلن خلال آخر 30 يوماً.'
                             : allowance.free_block_reason === 'name'
-                            ? 'اسم المعلن هذا استخدم الإعلان المجاني مسبقاً (المجاني مرة واحدة فقط).'
-                            : 'رقم الموبايل هذا استخدم الإعلان المجاني مسبقاً (المجاني مرة واحدة فقط).'
+                            ? 'اسم المعلن هذا استخدم الإعلان المجاني خلال آخر 30 يوماً.'
+                            : 'رقم الموبايل هذا استخدم الإعلان المجاني خلال آخر 30 يوماً.'
                           : 'وصلت للحد الأقصى في باقتك الحالية.'}
                       </span>
                       <button
@@ -262,9 +297,9 @@ export default function AddAdForm({
                 </div>
               ) : (
                 <p>
-                  <strong>الباقة المجانية:</strong> إعلان واحد فقط <strong>مرة واحدة</strong> لكل رقم موبايل أو اسم معلن، يظهر لمدة{' '}
-                  <strong>{settings.free_ad_days || 7} أيام</strong> ويختفي تلقائياً بعد انتهاء الأسبوع.
-                  للمزيد من الإعلانات والظهور المميز أدخل كود اشتراكك أو اختر باقة.
+                  <strong>الباقة المجانية:</strong> إعلان واحد فقط <strong>كل 30 يوم</strong> لكل رقم موبايل أو اسم معلن أو جهاز، يظهر لمدة{' '}
+                  <strong>{settings.free_ad_days || 7} أيام</strong> مع صورة واحدة ويختفي تلقائياً بعد انتهاء الأسبوع.
+                  للمزيد من الإعلانات والصور المتعددة أدخل كود اشتراكك أو اختر باقة.
                 </p>
               )}
             </div>
@@ -356,18 +391,18 @@ export default function AddAdForm({
                 required
                 value={formData.title}
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="مثال: توزيع مواد غذائية بالجملة"
+                placeholder="مثال: سيارة تويوتا كورولا 2021 أو شقة للبيع بالتجمع"
                 className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none text-sm"
               />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1.5">التصنيف *</label>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">القسم / التصنيف *</label>
                 <select
                   value={formData.category}
                   onChange={(e) =>
-                    setFormData({ ...formData, category: e.target.value as AdCategory })
+                    setFormData({ ...formData, category: e.target.value as AdCategory, specs: {} })
                   }
                   className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none bg-white text-sm"
                 >
@@ -416,6 +451,54 @@ export default function AddAdForm({
               </div>
             )}
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                  السعر بالجنيه المصري (اختياري)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={formData.price}
+                  onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                  placeholder="مثال: 15000"
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none tabular-nums text-sm"
+                />
+                <label className="inline-flex items-center gap-2 mt-2 text-xs font-bold text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.price_negotiable}
+                    onChange={(e) =>
+                      setFormData({ ...formData, price_negotiable: e.target.checked })
+                    }
+                  />
+                  السعر قابل للتفاوض
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">حالة المنتج</label>
+                <select
+                  value={formData.item_condition}
+                  onChange={(e) =>
+                    setFormData({ ...formData, item_condition: e.target.value as ItemCondition })
+                  }
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none bg-white text-sm"
+                >
+                  <option value="unspecified">غير محدد</option>
+                  <option value="new">جديد</option>
+                  <option value="used">مستعمل</option>
+                </select>
+              </div>
+            </div>
+
+            <CategorySpecsFields
+              category={resolvedCategory}
+              specs={formData.specs}
+              onChange={(nextSpecs) => setFormData({ ...formData, specs: nextSpecs })}
+            />
+
             <div>
               <label className="block text-sm font-bold text-slate-700 mb-1.5">وصف الإعلان *</label>
               <textarea
@@ -423,48 +506,23 @@ export default function AddAdForm({
                 rows={3}
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="اكتب تفاصيل المنتجات أو الخدمات وشروط التوزيع..."
+                placeholder="اكتب كافة التفاصيل والمواصفات وشروط البيع أو التوزيع..."
                 className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none resize-none text-sm"
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1.5">
-                رابط الصورة الرئيسية (اختياري)
-              </label>
-              <input
-                type="url"
-                value={formData.image_url}
-                onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                placeholder="https://example.com/product.jpg"
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none text-left text-sm"
-                dir="ltr"
-              />
-            </div>
-
-            {allowance?.allow_extra_images && (
-              <div className="p-4 rounded-2xl bg-blue-50/70 border border-blue-200 space-y-2.5">
-                <p className="text-xs font-extrabold text-blue-900 flex items-center gap-1.5">
-                  <ImagePlus className="w-4 h-4 text-blue-700" />
-                  صور إضافية (ميزة باقتك المدفوعة)
-                </p>
-                {formData.extra_images.map((url, idx) => (
-                  <input
-                    key={idx}
-                    type="url"
-                    value={url}
-                    onChange={(e) => {
-                      const next = [...formData.extra_images];
-                      next[idx] = e.target.value;
-                      setFormData({ ...formData, extra_images: next });
-                    }}
-                    placeholder={`رابط صورة إضافية ${idx + 1}`}
-                    className="w-full px-3.5 py-2 border border-blue-200 rounded-xl bg-white text-left text-xs outline-none"
-                    dir="ltr"
-                  />
-                ))}
-              </div>
-            )}
+            <AdImageUploader
+              imageUrl={formData.image_url}
+              extraImages={formData.extra_images}
+              maxImages={maxImages}
+              onChange={(mainUrl, extras) =>
+                setFormData((prev) => ({ ...prev, image_url: mainUrl, extra_images: extras }))
+              }
+              onUpgradeClick={() => {
+                onClose();
+                onUpgrade();
+              }}
+            />
 
             {allowance?.allow_banner && (
               <div>
@@ -481,6 +539,20 @@ export default function AddAdForm({
                 />
               </div>
             )}
+
+            <GoogleMapLocationPicker
+              latitude={formData.latitude}
+              longitude={formData.longitude}
+              locationAddress={formData.location_address}
+              onChange={({ latitude, longitude, locationAddress }) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  latitude,
+                  longitude,
+                  location_address: locationAddress,
+                }))
+              }
+            />
 
             <button
               type="submit"

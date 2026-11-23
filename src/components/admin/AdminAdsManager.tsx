@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Clock, Edit3, Plus, Search, Star, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit3, MapPin, Plus, Search, Star, Trash2, X } from 'lucide-react';
 import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../../data/seedData';
 import {
   createAd,
@@ -8,7 +8,10 @@ import {
   isAdExpired,
   updateAdAdmin,
 } from '../../services/dataService';
-import { Ad, AdCategory, AdStatus } from '../../types';
+import { Ad, AdCategory, AdSpecs, AdStatus, ItemCondition } from '../../types';
+import AdImageUploader from '../AdImageUploader';
+import CategorySpecsFields from '../CategorySpecsFields';
+import GoogleMapLocationPicker from '../GoogleMapLocationPicker';
 
 const CUSTOM_CATEGORY_VALUE = '__custom__';
 
@@ -41,14 +44,22 @@ export default function AdminAdsManager({
   const [newAdForm, setNewAdForm] = useState({
     client_name: '',
     title: '',
-    category: (categories[0] || 'توزيع') as AdCategory,
+    category: (categories[0] || 'إعلانات تجارية') as AdCategory,
     custom_category: '',
     description: '',
     contact: '',
     city: 'القاهرة',
     image: '📦',
     image_url: '',
+    extra_images: [] as string[],
     banner_url: '',
+    price: '',
+    price_negotiable: false,
+    item_condition: 'unspecified' as ItemCondition,
+    specs: {} as AdSpecs,
+    latitude: null as number | null,
+    longitude: null as number | null,
+    location_address: '',
     package_name: 'مجاني',
     duration_days: 7 as number | null,
     featured: false,
@@ -161,7 +172,20 @@ export default function AdminAdsManager({
         package_name: editingAd.package_name || 'مجاني',
         priority_rank: priorityRank,
         image_url: editingAd.image_url,
+        extra_images: editingAd.extra_images || [],
         banner_url: editingAd.banner_url,
+        price:
+          editingAd.price !== null &&
+          editingAd.price !== undefined &&
+          Number.isFinite(Number(editingAd.price))
+            ? Math.max(0, Number(editingAd.price))
+            : null,
+        price_negotiable: Boolean(editingAd.price_negotiable),
+        item_condition: editingAd.item_condition || 'unspecified',
+        specs: editingAd.specs || {},
+        latitude: editingAd.latitude ?? null,
+        longitude: editingAd.longitude ?? null,
+        location_address: editingAd.location_address?.trim() || null,
         expires_at: editingAd.expires_at ?? null,
         client_edits_count: editingAd.client_edits_count ?? 0,
       });
@@ -186,10 +210,16 @@ export default function AdminAdsManager({
     setBusyId('new');
     setActionError(null);
     try {
-      const { custom_category: _unused, ...rest } = newAdForm;
+      const parsedPrice =
+        newAdForm.price.trim() !== '' && Number.isFinite(Number(newAdForm.price))
+          ? Math.max(0, Number(newAdForm.price))
+          : null;
+      const { custom_category: _unused, price: _rawPrice, ...rest } = newAdForm;
       await createAd({
         ...rest,
         category: resolvedCategory,
+        price: parsedPrice,
+        location_address: newAdForm.location_address.trim() || null,
         asAdmin: true,
         requireApproval: false,
       });
@@ -197,14 +227,22 @@ export default function AdminAdsManager({
       setNewAdForm({
         client_name: '',
         title: '',
-        category: (categories[0] || 'توزيع') as AdCategory,
+        category: (categories[0] || 'إعلانات تجارية') as AdCategory,
         custom_category: '',
         description: '',
         contact: '',
         city: 'القاهرة',
         image: '📦',
         image_url: '',
+        extra_images: [],
         banner_url: '',
+        price: '',
+        price_negotiable: false,
+        item_condition: 'unspecified',
+        specs: {},
+        latitude: null,
+        longitude: null,
+        location_address: '',
         package_name: 'مجاني',
         duration_days: 7,
         featured: false,
@@ -227,6 +265,14 @@ export default function AdminAdsManager({
     const target = new Date(base.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
     setEditingAd({ ...editingAd, starts_at: base.toISOString(), expires_at: target });
   };
+
+  const resolvedEditCategory = editingAd
+    ? editingAd.category === CUSTOM_CATEGORY_VALUE
+      ? editCustomCategory
+      : editingAd.category
+    : '';
+  const resolvedNewCategory =
+    newAdForm.category === CUSTOM_CATEGORY_VALUE ? newAdForm.custom_category : newAdForm.category;
 
   return (
     <div className="space-y-5">
@@ -318,7 +364,20 @@ export default function AdminAdsManager({
                             <p className="text-xs text-slate-500 truncate">
                               {ad.client_name ? `${ad.client_name} · ` : ''}
                               {ad.category} · {ad.city}
+                              {typeof ad.price === 'number'
+                                ? ` · ${ad.price.toLocaleString('en-US')} ج.م`
+                                : ''}
                             </p>
+                            {(ad.location_address ||
+                              (typeof ad.latitude === 'number' &&
+                                typeof ad.longitude === 'number')) && (
+                              <p className="text-[11px] text-blue-700 flex items-center gap-1 truncate mt-0.5">
+                                <MapPin className="w-3 h-3 shrink-0" />
+                                <span className="truncate">
+                                  {ad.location_address || 'موقع محدد على الخريطة'}
+                                </span>
+                              </p>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -451,7 +510,7 @@ export default function AdminAdsManager({
           <div className="absolute inset-0 bg-slate-950/60" onClick={() => setEditingAd(null)} />
           <form
             onSubmit={handleSaveEdit}
-            className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
+            className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-extrabold text-lg text-slate-900">تعديل الإعلان والمدة</h3>
@@ -540,6 +599,60 @@ export default function AdminAdsManager({
               </select>
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">السعر (ج.م)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  placeholder="اختياري"
+                  value={
+                    editingAd.price !== null && editingAd.price !== undefined
+                      ? String(editingAd.price)
+                      : ''
+                  }
+                  onChange={(e) =>
+                    setEditingAd({
+                      ...editingAd,
+                      price: e.target.value.trim() === '' ? null : Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm tabular-nums"
+                />
+                <label className="inline-flex items-center gap-2 mt-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingAd.price_negotiable)}
+                    onChange={(e) =>
+                      setEditingAd({ ...editingAd, price_negotiable: e.target.checked })
+                    }
+                  />
+                  قابل للتفاوض
+                </label>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">حالة المنتج</label>
+                <select
+                  value={editingAd.item_condition || 'unspecified'}
+                  onChange={(e) =>
+                    setEditingAd({ ...editingAd, item_condition: e.target.value as ItemCondition })
+                  }
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+                >
+                  <option value="unspecified">غير محدد</option>
+                  <option value="new">جديد</option>
+                  <option value="used">مستعمل</option>
+                </select>
+              </div>
+            </div>
+
+            <CategorySpecsFields
+              category={resolvedEditCategory}
+              specs={editingAd.specs || {}}
+              onChange={(nextSpecs) => setEditingAd({ ...editingAd, specs: nextSpecs })}
+            />
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">الباقة</label>
@@ -581,14 +694,15 @@ export default function AdminAdsManager({
               </div>
             </div>
 
-            <input
-              type="url"
-              placeholder="رابط الصورة الرئيسية (اختياري)"
-              value={editingAd.image_url || ''}
-              onChange={(e) => setEditingAd({ ...editingAd, image_url: e.target.value })}
-              className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs text-left"
-              dir="ltr"
+            <AdImageUploader
+              imageUrl={editingAd.image_url || ''}
+              extraImages={editingAd.extra_images || []}
+              maxImages={6}
+              onChange={(mainUrl, extras) =>
+                setEditingAd({ ...editingAd, image_url: mainUrl, extra_images: extras })
+              }
             />
+
             <input
               type="url"
               placeholder="رابط البانر المؤسسي (اختياري)"
@@ -605,6 +719,21 @@ export default function AdminAdsManager({
               onChange={(e) => setEditingAd({ ...editingAd, description: e.target.value })}
               className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm resize-none"
             />
+
+            <GoogleMapLocationPicker
+              latitude={editingAd.latitude ?? null}
+              longitude={editingAd.longitude ?? null}
+              locationAddress={editingAd.location_address || ''}
+              onChange={({ latitude, longitude, locationAddress }) =>
+                setEditingAd({
+                  ...editingAd,
+                  latitude,
+                  longitude,
+                  location_address: locationAddress,
+                })
+              }
+            />
+
             <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
               <input
                 type="checkbox"
@@ -643,7 +772,7 @@ export default function AdminAdsManager({
           <div className="absolute inset-0 bg-slate-950/60" onClick={() => setCreatingNew(false)} />
           <form
             onSubmit={handleCreateAdminAd}
-            className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
+            className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6 space-y-4 border border-slate-200 shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-extrabold text-lg text-slate-900">نشر إعلان مباشر من الإدارة</h3>
@@ -671,7 +800,11 @@ export default function AdminAdsManager({
               <select
                 value={newAdForm.category}
                 onChange={(e) =>
-                  setNewAdForm({ ...newAdForm, category: e.target.value as AdCategory })
+                  setNewAdForm({
+                    ...newAdForm,
+                    category: e.target.value as AdCategory,
+                    specs: {},
+                  })
                 }
                 className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white"
               >
@@ -732,6 +865,64 @@ export default function AdminAdsManager({
                 className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums"
               />
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">السعر (ج.م)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  placeholder="اختياري"
+                  value={newAdForm.price}
+                  onChange={(e) => setNewAdForm({ ...newAdForm, price: e.target.value })}
+                  className="w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm tabular-nums"
+                />
+                <label className="inline-flex items-center gap-2 mt-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newAdForm.price_negotiable}
+                    onChange={(e) =>
+                      setNewAdForm({ ...newAdForm, price_negotiable: e.target.checked })
+                    }
+                  />
+                  قابل للتفاوض
+                </label>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">حالة المنتج</label>
+                <select
+                  value={newAdForm.item_condition}
+                  onChange={(e) =>
+                    setNewAdForm({
+                      ...newAdForm,
+                      item_condition: e.target.value as ItemCondition,
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+                >
+                  <option value="unspecified">غير محدد</option>
+                  <option value="new">جديد</option>
+                  <option value="used">مستعمل</option>
+                </select>
+              </div>
+            </div>
+
+            <CategorySpecsFields
+              category={resolvedNewCategory}
+              specs={newAdForm.specs}
+              onChange={(nextSpecs) => setNewAdForm({ ...newAdForm, specs: nextSpecs })}
+            />
+
+            <AdImageUploader
+              imageUrl={newAdForm.image_url}
+              extraImages={newAdForm.extra_images}
+              maxImages={6}
+              onChange={(mainUrl, extras) =>
+                setNewAdForm((prev) => ({ ...prev, image_url: mainUrl, extra_images: extras }))
+              }
+            />
+
             <input
               type="url"
               placeholder="رابط البانر الإعلاني (اختياري)"
@@ -748,6 +939,21 @@ export default function AdminAdsManager({
               onChange={(e) => setNewAdForm({ ...newAdForm, description: e.target.value })}
               className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm resize-none"
             />
+
+            <GoogleMapLocationPicker
+              latitude={newAdForm.latitude}
+              longitude={newAdForm.longitude}
+              locationAddress={newAdForm.location_address}
+              onChange={({ latitude, longitude, locationAddress }) =>
+                setNewAdForm((prev) => ({
+                  ...prev,
+                  latitude,
+                  longitude,
+                  location_address: locationAddress,
+                }))
+              }
+            />
+
             <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
               <input
                 type="checkbox"

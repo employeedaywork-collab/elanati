@@ -7,15 +7,22 @@ import {
   INITIAL_TESTIMONIALS,
 } from '../data/seedData';
 import {
+  compressAdImage,
+  getOrCreateDeviceId,
   isPreviewAuthAllowed,
   isSupabaseConfigured,
+  sanitizeAdImageUrl,
   sanitizeHttpUrl,
   supabase,
 } from '../lib/supabase';
 import {
+  AccessLogEntry,
   Ad,
   AdAllowance,
   AdCategory,
+  AdReport,
+  AdReportStatus,
+  AdSpecs,
   AdStatus,
   AdminSession,
   AutomationConfig,
@@ -24,6 +31,7 @@ import {
   CategoryItem,
   ClientPortalData,
   ContactMessage,
+  ItemCondition,
   PackagePlan,
   PackageRequest,
   PackageRequestStatus,
@@ -50,6 +58,9 @@ const STORAGE_KEYS = {
   automationConfig: 'elanati_local_automation_cfg_v1',
   whatsappLogs: 'elanati_local_wa_logs_v1',
   previewAdmin: 'elanati_preview_admin_v1',
+  adReports: 'elanati_local_ad_reports_v1',
+  accessLogs: 'elanati_local_access_logs_v1',
+  favorites: 'elanati_favorites_v1',
 };
 
 function readLocal<T>(key: string, fallback: T): T {
@@ -153,13 +164,77 @@ function addDaysIso(from: Date, days: number): string {
 }
 
 function normalizeAdRow(row: any): Ad {
+  const rawPrice = row.price;
+  const price =
+    rawPrice !== null && rawPrice !== undefined && rawPrice !== '' && Number.isFinite(Number(rawPrice))
+      ? Number(rawPrice)
+      : null;
+  const rawLat = row.latitude;
+  const rawLng = row.longitude;
+  const hasCoords =
+    rawLat !== null &&
+    rawLat !== undefined &&
+    rawLng !== null &&
+    rawLng !== undefined &&
+    Number.isFinite(Number(rawLat)) &&
+    Number.isFinite(Number(rawLng));
+
   return {
     ...row,
     extra_images: Array.isArray(row.extra_images) ? row.extra_images : [],
+    price,
+    price_negotiable: Boolean(row.price_negotiable),
+    item_condition:
+      row.item_condition === 'new' || row.item_condition === 'used'
+        ? row.item_condition
+        : 'unspecified',
+    specs: row.specs && typeof row.specs === 'object' && !Array.isArray(row.specs) ? row.specs : {},
+    latitude: hasCoords ? Number(rawLat) : null,
+    longitude: hasCoords ? Number(rawLng) : null,
+    location_address: row.location_address || null,
     priority_rank: typeof row.priority_rank === 'number' ? row.priority_rank : 0,
     client_edits_count: typeof row.client_edits_count === 'number' ? row.client_edits_count : 0,
     last_client_edited_at: row.last_client_edited_at || null,
   } as Ad;
+}
+
+export async function uploadAdImage(file: File): Promise<string> {
+  const { blob, ext, mimeType } = await compressAdImage(file);
+
+  if (supabase) {
+    const rand = Math.random().toString(36).slice(2, 10);
+    const objectPath = `ads/${Date.now()}-${rand}.${ext}`;
+    const { error } = await supabase.storage.from('elanati-ad-images').upload(objectPath, blob, {
+      contentType: mimeType,
+      cacheControl: '31536000',
+      upsert: false,
+    });
+    if (error) {
+      throw new Error(
+        error.message.includes('Bucket not found')
+          ? 'يرجى تشغيل أحدث ملف supabase/schema.sql لإنشاء حاوية صور الإعلانات أولاً'
+          : `تعذر رفع الصورة: ${error.message}`
+      );
+    }
+    const { data } = supabase.storage.from('elanati-ad-images').getPublicUrl(objectPath);
+    if (!data?.publicUrl) {
+      throw new Error('تعذر الحصول على رابط الصورة المرفوعة');
+    }
+    return data.publicUrl;
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('تعذر قراءة الصورة المضغوطة'));
+      }
+    };
+    reader.onerror = () => reject(new Error('تعذر معالجة الصورة محلياً'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ============================================================================
@@ -402,6 +477,31 @@ export async function checkAdAllowance(
   const freeDays = Math.max(1, settings.free_ad_days || 7);
   const proDays = Math.max(1, settings.pro_ad_days || 30);
 
+  if (isSupabaseConfigured) {
+    try {
+      const res = await fetch('/api/ads/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'check',
+          contact,
+          subscriptionCode: subscriptionCode || '',
+          clientName: clientName || '',
+          deviceId: getOrCreateDeviceId(),
+        }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json') && res.ok) {
+        const json = await res.json().catch(() => null);
+        if (json?.allowance) {
+          return json.allowance as AdAllowance;
+        }
+      }
+    } catch {
+      // fall back to Supabase RPC when Vercel serverless route is unavailable in Vite preview
+    }
+  }
+
   if (supabase) {
     const { data, error } = await supabase.rpc('check_elanati_ad_allowance', {
       p_contact: contact,
@@ -452,30 +552,27 @@ export async function checkAdAllowance(
       featured: true,
       priority_rank: isEnterprise ? 2 : 1,
       allow_extra_images: true,
+      max_images: 6,
       allow_banner: isEnterprise,
       free_trial_used: false,
       free_block_reason: null,
+      cooldown_days: 30,
     };
   }
 
-  // Free plan is strictly once only per mobile number OR advertiser name (across active & expired/archived non-rejected ads)
+  const thirtyDaysAgoMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const recentFreeAds = ads.filter(
+    (a) =>
+      (a.package_name || 'مجاني') === 'مجاني' &&
+      a.status !== 'rejected' &&
+      new Date(a.created_at).getTime() >= thirtyDaysAgoMs
+  );
+
   const usedByPhone = Boolean(
-    digits &&
-      ads.some(
-        (a) =>
-          (a.package_name || 'مجاني') === 'مجاني' &&
-          a.status !== 'rejected' &&
-          normalizeDigits(a.contact) === digits
-      )
+    digits && recentFreeAds.some((a) => normalizeDigits(a.contact) === digits)
   );
   const usedByName = Boolean(
-    normalizedName &&
-      ads.some(
-        (a) =>
-          (a.package_name || 'مجاني') === 'مجاني' &&
-          a.status !== 'rejected' &&
-          normalizeClientName(a.client_name) === normalizedName
-      )
+    normalizedName && recentFreeAds.some((a) => normalizeClientName(a.client_name) === normalizedName)
   );
   const freeTrialUsed = usedByPhone || usedByName;
   const blockReason: AdAllowance['free_block_reason'] =
@@ -492,9 +589,11 @@ export async function checkAdAllowance(
     featured: false,
     priority_rank: 0,
     allow_extra_images: false,
+    max_images: 1,
     allow_banner: false,
     free_trial_used: freeTrialUsed,
     free_block_reason: blockReason,
+    cooldown_days: 30,
   };
 }
 
@@ -770,7 +869,7 @@ export async function fetchClientPortal(_query: string): Promise<ClientPortalDat
 // Advertisements
 // ============================================================================
 const PUBLIC_AD_COLUMNS =
-  'id, title, category, description, contact, whatsapp, city, image, image_url, extra_images, banner_url, package_name, priority_rank, status, featured, views_count, starts_at, expires_at, created_at, updated_at';
+  'id, title, category, description, contact, whatsapp, city, image, image_url, extra_images, banner_url, price, price_negotiable, item_condition, specs, latitude, longitude, location_address, package_name, priority_rank, status, featured, views_count, starts_at, expires_at, created_at, updated_at';
 
 export async function fetchPublicAds(): Promise<Ad[]> {
   const nowIso = new Date().toISOString();
@@ -837,6 +936,8 @@ export async function fetchAdminBadgeCounts(): Promise<{
   openTickets: number;
   pendingPackages: number;
   pendingOtps: number;
+  openReports: number;
+  blockedAttempts: number;
 }> {
   if (supabase) {
     const nowIso = new Date().toISOString();
@@ -861,10 +962,13 @@ export async function fetchAdminBadgeCounts(): Promise<{
         openTickets: Number(rpcRes.data.open_tickets || 0),
         pendingPackages: Number(rpcRes.data.pending_packages || 0),
         pendingOtps,
+        openReports: Number(rpcRes.data.open_reports || 0),
+        blockedAttempts: Number(rpcRes.data.blocked_attempts || 0),
       };
     }
 
-    const [adsRes, ticketsRes, pkgsRes] = await Promise.all([
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const [adsRes, ticketsRes, pkgsRes, reportsRes, blockedRes] = await Promise.all([
       supabase.from('elanati_ads').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase
         .from('elanati_contact_messages')
@@ -874,23 +978,38 @@ export async function fetchAdminBadgeCounts(): Promise<{
         .from('elanati_package_requests')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'pending'),
+      supabase.from('elanati_ad_reports').select('id', { count: 'exact', head: true }).eq('status', 'open'),
+      supabase
+        .from('elanati_access_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('event_type', 'ad_submit_blocked')
+        .gte('created_at', since24h),
     ]);
     return {
       pendingAds: adsRes.count || 0,
       openTickets: ticketsRes.count || 0,
       pendingPackages: pkgsRes.count || 0,
       pendingOtps,
+      openReports: reportsRes.count || 0,
+      blockedAttempts: blockedRes.count || 0,
     };
   }
 
   const ads = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   const tickets = readLocal<ContactMessage[]>(STORAGE_KEYS.messages, []);
   const pkgs = readLocal<PackageRequest[]>(STORAGE_KEYS.packageRequests, []);
+  const reports = readLocal<AdReport[]>(STORAGE_KEYS.adReports, []);
+  const logs = readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+  const since24h = Date.now() - 24 * 60 * 60 * 1000;
   return {
     pendingAds: ads.filter((a) => a.status === 'pending').length,
     openTickets: tickets.filter((t) => t.status === 'new' || t.status === 'in_progress').length,
     pendingPackages: pkgs.filter((r) => r.status === 'pending').length,
     pendingOtps: 0,
+    openReports: reports.filter((r) => r.status === 'open').length,
+    blockedAttempts: logs.filter(
+      (l) => l.event_type === 'ad_submit_blocked' && new Date(l.created_at).getTime() >= since24h
+    ).length,
   };
 }
 
@@ -905,6 +1024,13 @@ export interface CreateAdInput {
   image_url?: string;
   extra_images?: string[];
   banner_url?: string;
+  price?: number | null;
+  price_negotiable?: boolean;
+  item_condition?: ItemCondition;
+  specs?: AdSpecs | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_address?: string | null;
   package_name?: string;
   subscription_code?: string;
   duration_days?: number | null;
@@ -917,24 +1043,82 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
   const settings = await fetchSiteSettings();
   const now = new Date();
   const nowIso = now.toISOString();
+  const sanitizeImg = supabase ? sanitizeHttpUrl : sanitizeAdImageUrl;
+
+  if (!input.asAdmin && isSupabaseConfigured) {
+    try {
+      const res = await fetch('/api/ads/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'submit',
+          deviceId: getOrCreateDeviceId(),
+          client_name: input.client_name,
+          title: input.title,
+          category: input.category,
+          description: input.description,
+          contact: input.contact,
+          city: input.city,
+          image: input.image,
+          image_url: input.image_url,
+          extra_images: input.extra_images,
+          banner_url: input.banner_url,
+          price: input.price,
+          price_negotiable: input.price_negotiable,
+          item_condition: input.item_condition,
+          specs: input.specs,
+          latitude: input.latitude,
+          longitude: input.longitude,
+          location_address: input.location_address,
+          subscription_code: input.subscription_code,
+        }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(json?.error || 'تعذر إرسال الإعلان');
+        }
+        if (json?.ad) {
+          const normalized = normalizeAdRow(json.ad);
+          if (normalized.owner_pin) {
+            saveAdPinLocally(normalized.id, normalized.owner_pin);
+          }
+          return {
+            ad: normalized,
+            requiresReview: Boolean(json.requiresReview),
+          };
+        }
+      }
+    } catch (err: any) {
+      if (err?.message && !String(err.message).toLowerCase().includes('fetch')) {
+        throw err;
+      }
+    }
+  }
 
   let allowance: AdAllowance | null = null;
   if (!input.asAdmin) {
     allowance = await checkAdAllowance(input.contact, input.subscription_code, input.client_name);
     if (!allowance.allowed) {
       if (allowance.package_name === 'مجاني') {
+        if (allowance.free_block_reason === 'ip_device') {
+          throw new Error(
+            'تم رصد نشر إعلان مجاني من نفس الشبكة أو الجهاز خلال آخر 30 يوماً. الباقة المجانية متاحة لمرة واحدة كل 30 يوم، يمكنك الترقية للباقة الاحترافية أو المؤسسية.'
+          );
+        }
         if (allowance.free_block_reason === 'both') {
           throw new Error(
-            'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم واسم المعلن. الباقة المجانية متاحة لمرة واحدة فقط، يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
+            'تم استخدام الإعلان المجاني مسبقاً لهذا الرقم واسم المعلن خلال آخر 30 يوماً. يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
           );
         }
         if (allowance.free_block_reason === 'name') {
           throw new Error(
-            'اسم المعلن هذا استخدم الإعلان المجاني من قبل. الباقة المجانية متاحة لمرة واحدة فقط، يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
+            'اسم المعلن هذا استخدم الإعلان المجاني خلال آخر 30 يوماً. يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
           );
         }
         throw new Error(
-          'رقم الموبايل هذا استخدم الإعلان المجاني من قبل. الباقة المجانية متاحة لمرة واحدة فقط، يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
+          'رقم الموبايل هذا استخدم الإعلان المجاني خلال آخر 30 يوماً. يمكنك الترقية إلى الباقة الاحترافية أو المؤسسية لإضافة إعلانات جديدة.'
         );
       }
       throw new Error(
@@ -970,9 +1154,7 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     }
   }
 
-  const isFeatured = input.asAdmin
-    ? Boolean(input.featured)
-    : Boolean(allowance?.featured);
+  const isFeatured = input.asAdmin ? Boolean(input.featured) : Boolean(allowance?.featured);
 
   const priorityRank = input.asAdmin
     ? effectivePackage === 'المؤسسي'
@@ -983,29 +1165,37 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     : allowance?.priority_rank || 0;
 
   const rawImageUrl = input.image_url?.trim() || '';
-  const safeImageUrl = rawImageUrl ? sanitizeHttpUrl(rawImageUrl) : null;
+  const safeImageUrl = rawImageUrl ? sanitizeImg(rawImageUrl) : null;
   if (rawImageUrl && !safeImageUrl) {
     throw new Error('رابط الصورة الرئيسية غير صالح، يجب أن يبدأ بـ https:// أو http://');
   }
 
-  const rawExtraImages = (input.extra_images || []).map((u) => u.trim()).filter(Boolean).slice(0, 4);
+  const canExtraImages = Boolean(input.asAdmin || allowance?.allow_extra_images);
+  const rawExtraImages = (input.extra_images || [])
+    .map((u) => u.trim())
+    .filter(Boolean)
+    .slice(0, 5);
   const extraImages: string[] = [];
-  for (const rawUrl of rawExtraImages) {
-    const safeUrl = sanitizeHttpUrl(rawUrl);
-    if (!safeUrl) {
-      throw new Error('أحد روابط الصور الإضافية غير صالح، يجب أن يبدأ بـ https:// أو http://');
+  if (canExtraImages) {
+    for (const rawUrl of rawExtraImages) {
+      const safeUrl = sanitizeImg(rawUrl);
+      if (!safeUrl) {
+        throw new Error('أحد روابط الصور الإضافية غير صالح، يجب أن يبدأ بـ https:// أو http://');
+      }
+      extraImages.push(safeUrl);
     }
-    extraImages.push(safeUrl);
   }
 
   const rawBannerUrl =
     input.asAdmin || allowance?.allow_banner ? input.banner_url?.trim() || '' : '';
-  const bannerUrl = rawBannerUrl ? sanitizeHttpUrl(rawBannerUrl) : null;
+  const bannerUrl = rawBannerUrl ? sanitizeImg(rawBannerUrl) : null;
   if (rawBannerUrl && !bannerUrl) {
     throw new Error('رابط البانر الإعلاني غير صالح، يجب أن يبدأ بـ https:// أو http://');
   }
 
-  const requiresReview = input.asAdmin ? false : (input.requireApproval ?? settings.require_ad_approval);
+  const requiresReview = input.asAdmin
+    ? false
+    : (input.requireApproval ?? settings.require_ad_approval);
   const status: AdStatus = requiresReview ? 'pending' : 'approved';
 
   const cleanCategory = input.category.trim().replace(/\s+/g, ' ');
@@ -1015,6 +1205,11 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
 
   const ownerPin = generateOwnerPin();
   const adId = generateId('ad');
+
+  const safePrice =
+    input.price !== null && input.price !== undefined && Number.isFinite(Number(input.price))
+      ? Math.max(0, Number(input.price))
+      : null;
 
   const newAd: Ad = {
     id: adId,
@@ -1027,8 +1222,19 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
     city: input.city.trim(),
     image: input.image || '📦',
     image_url: safeImageUrl,
-    extra_images: input.asAdmin || allowance?.allow_extra_images ? extraImages : [],
+    extra_images: extraImages,
     banner_url: bannerUrl,
+    price: safePrice,
+    price_negotiable: Boolean(input.price_negotiable),
+    item_condition: input.item_condition || 'unspecified',
+    specs: input.specs || {},
+    latitude:
+      typeof input.latitude === 'number' && Number.isFinite(input.latitude) ? input.latitude : null,
+    longitude:
+      typeof input.longitude === 'number' && Number.isFinite(input.longitude)
+        ? input.longitude
+        : null,
+    location_address: input.location_address?.trim() || null,
     package_name: effectivePackage,
     subscription_code: allowance?.subscription_code || input.subscription_code || null,
     owner_pin: ownerPin,
@@ -1062,6 +1268,13 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
       image_url: newAd.image_url,
       extra_images: newAd.extra_images,
       banner_url: newAd.banner_url,
+      price: newAd.price,
+      price_negotiable: newAd.price_negotiable,
+      item_condition: newAd.item_condition,
+      specs: newAd.specs,
+      latitude: newAd.latitude,
+      longitude: newAd.longitude,
+      location_address: newAd.location_address,
       package_name: newAd.package_name,
       subscription_code: newAd.subscription_code,
       owner_pin: ownerPin,
@@ -1080,10 +1293,25 @@ export async function createAd(input: CreateAdInput): Promise<{ ad: Ad; requires
   const all = readLocal<Ad[]>(STORAGE_KEYS.ads, INITIAL_ADS);
   writeLocal(STORAGE_KEYS.ads, [newAd, ...all]);
   saveAdPinLocally(newAd.id, ownerPin);
+  if (!input.asAdmin) {
+    const logs = readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+    writeLocal(STORAGE_KEYS.accessLogs, [
+      {
+        id: generateId('log'),
+        event_type: 'ad_submit_ok',
+        actor_label: `${newAd.client_name || 'معلن'} (${maskPhoneLocal(newAd.contact)})`,
+        ip_hint: 'معاينة محلية',
+        reason: `نشر إعلان (${newAd.package_name})`,
+        created_at: nowIso,
+      },
+      ...logs.slice(0, 149),
+    ]);
+  }
   return { ad: newAd, requiresReview };
 }
 
 export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad> {
+  const sanitizeImg = supabase ? sanitizeHttpUrl : sanitizeAdImageUrl;
   const cleanCategory = patch.category ? patch.category.trim().replace(/\s+/g, ' ') : undefined;
   if (cleanCategory) {
     try {
@@ -1097,17 +1325,28 @@ export async function updateAdAdmin(id: string, patch: Partial<Ad>): Promise<Ad>
   if (patch.image_url !== undefined) {
     const trimmed = (patch.image_url || '').trim();
     if (trimmed) {
-      const safe = sanitizeHttpUrl(trimmed);
+      const safe = sanitizeImg(trimmed);
       if (!safe) throw new Error('رابط الصورة غير صالح');
       sanitizedPatch.image_url = safe;
     } else {
       sanitizedPatch.image_url = null;
     }
   }
+  if (patch.extra_images !== undefined) {
+    const cleanedExtras: string[] = [];
+    for (const raw of patch.extra_images.slice(0, 5)) {
+      const t = String(raw || '').trim();
+      if (!t) continue;
+      const safe = sanitizeImg(t);
+      if (!safe) throw new Error('أحد روابط الصور الإضافية غير صالح');
+      cleanedExtras.push(safe);
+    }
+    sanitizedPatch.extra_images = cleanedExtras;
+  }
   if (patch.banner_url !== undefined) {
     const trimmed = (patch.banner_url || '').trim();
     if (trimmed) {
-      const safe = sanitizeHttpUrl(trimmed);
+      const safe = sanitizeImg(trimmed);
       if (!safe) throw new Error('رابط البانر غير صالح');
       sanitizedPatch.banner_url = safe;
     } else {
@@ -1155,22 +1394,49 @@ export async function editAdByClient(input: {
   description: string;
   image?: string;
   image_url?: string;
+  extra_images?: string[];
+  price?: number | null;
+  price_negotiable?: boolean;
+  item_condition?: ItemCondition;
+  specs?: AdSpecs | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_address?: string | null;
 }): Promise<Ad> {
+  const sanitizeImg = supabase ? sanitizeHttpUrl : sanitizeAdImageUrl;
   const cleanCat = input.category.trim().replace(/\s+/g, ' ');
   if (cleanCat.length < 2) {
     throw new Error('يرجى اختيار أو كتابة اسم تصنيف صحيح');
   }
 
   const rawImage = input.image_url?.trim() || '';
-  const safeImage = rawImage ? sanitizeHttpUrl(rawImage) : null;
+  const safeImage = rawImage ? sanitizeImg(rawImage) : null;
   if (rawImage && !safeImage) {
     throw new Error('رابط الصورة غير صالح، يجب أن يبدأ بـ https:// أو http://');
+  }
+
+  const safeExtras: string[] = [];
+  if (Array.isArray(input.extra_images)) {
+    for (const raw of input.extra_images.slice(0, 5)) {
+      const t = String(raw || '').trim();
+      if (!t) continue;
+      const safe = sanitizeImg(t);
+      if (!safe) {
+        throw new Error('أحد روابط الصور الإضافية غير صالح');
+      }
+      safeExtras.push(safe);
+    }
   }
 
   const verifyCode = input.ownerQuery.trim().toUpperCase();
   if (verifyCode.length < 5) {
     throw new Error('يرجى إدخال كود تعديل الإعلان أو كود الاشتراك للتحقق من الملكية');
   }
+
+  const safePrice =
+    input.price !== undefined && input.price !== null && Number.isFinite(Number(input.price))
+      ? Math.max(0, Number(input.price))
+      : null;
 
   if (supabase) {
     const { data, error } = await supabase.rpc('edit_elanati_ad_by_client', {
@@ -1182,6 +1448,14 @@ export async function editAdByClient(input: {
       p_description: input.description.trim(),
       p_image: input.image || null,
       p_image_url: safeImage,
+      p_price: safePrice,
+      p_price_negotiable: Boolean(input.price_negotiable),
+      p_item_condition: input.item_condition || 'unspecified',
+      p_specs: input.specs || {},
+      p_latitude: input.latitude ?? null,
+      p_longitude: input.longitude ?? null,
+      p_location_address: input.location_address?.trim() || null,
+      p_extra_images: input.extra_images ? safeExtras : null,
     });
     if (error) throw new Error(error.message);
     return normalizeAdRow(data);
@@ -1222,6 +1496,7 @@ export async function editAdByClient(input: {
       );
     }
 
+    const isPaid = (ad.package_name || 'مجاني') !== 'مجاني';
     updatedAd = normalizeAdRow({
       ...ad,
       title: input.title.trim(),
@@ -1230,6 +1505,17 @@ export async function editAdByClient(input: {
       description: input.description.trim(),
       image: input.image || ad.image,
       image_url: safeImage,
+      extra_images: input.extra_images ? (isPaid ? safeExtras : []) : ad.extra_images,
+      price: safePrice,
+      price_negotiable: Boolean(input.price_negotiable),
+      item_condition: input.item_condition || ad.item_condition,
+      specs: input.specs ?? ad.specs,
+      latitude: input.latitude !== undefined ? input.latitude : ad.latitude,
+      longitude: input.longitude !== undefined ? input.longitude : ad.longitude,
+      location_address:
+        input.location_address !== undefined
+          ? input.location_address?.trim() || null
+          : ad.location_address,
       client_edits_count: (ad.client_edits_count || 0) + 1,
       last_client_edited_at: nowIso,
       updated_at: nowIso,
@@ -1989,6 +2275,7 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
       );
     }
     if (!cleanEmail || password.length < 4) {
+      void logAdminLoginEvent(cleanEmail, false, 'بيانات دخول غير مكتملة (معاينة)');
       throw new Error('أدخل البريد الإلكتروني وكلمة مرور صالحة');
     }
     const previewSession: AdminSession = {
@@ -1997,6 +2284,7 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
       isPreviewMode: true,
     };
     writeLocal(STORAGE_KEYS.previewAdmin, previewSession);
+    void logAdminLoginEvent(cleanEmail, true, 'دخول ناجح (معاينة)');
     return previewSession;
   }
 
@@ -2005,6 +2293,7 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
     password,
   });
   if (error) {
+    void logAdminLoginEvent(cleanEmail, false, error.message);
     if (error.message === 'Invalid login credentials') {
       throw new Error('بيانات الدخول غير صحيحة');
     }
@@ -2014,15 +2303,18 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
     throw new Error(error.message);
   }
   if (!data.user?.email) {
+    void logAdminLoginEvent(cleanEmail, false, 'تعذر التحقق من المستخدم');
     throw new Error('تعذر التحقق من حساب المدير');
   }
 
   const claimRes = await supabase.rpc('claim_elanati_admin_session');
   if (!claimRes.error) {
     if (!claimRes.data) {
+      void logAdminLoginEvent(cleanEmail, false, 'حساب غير مصرح له بصلاحيات المدير');
       await supabase.auth.signOut();
       throw new Error('هذا الحساب غير مسجل ضمن صلاحيات مدير المنصة');
     }
+    void logAdminLoginEvent(claimRes.data.email, true, 'دخول ناجح للوحة المدير');
     return {
       email: claimRes.data.email,
       fullName: claimRes.data.full_name || 'مدير المنصة',
@@ -2037,10 +2329,12 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
     .maybeSingle();
 
   if (adminErr || !adminRow || (adminRow.user_id && adminRow.user_id !== data.user.id)) {
+    void logAdminLoginEvent(cleanEmail, false, 'حساب غير مصرح له بصلاحيات المدير');
     await supabase.auth.signOut();
     throw new Error('هذا الحساب غير مسجل ضمن صلاحيات مديري المنصة');
   }
 
+  void logAdminLoginEvent(adminRow.email, true, 'دخول ناجح للوحة المدير');
   return {
     email: adminRow.email,
     fullName: adminRow.full_name || 'مدير المنصة',
@@ -2585,4 +2879,261 @@ export async function sendTestAdminWebPush(): Promise<number> {
     throw new Error(data?.error || 'تعذر إرسال إشعار تجريبي');
   }
   return Number(data.sent || 1);
+}
+
+// ============================================================================
+// Favorites (Local Browser Storage)
+// ============================================================================
+export function getFavoriteAdIds(): string[] {
+  return readLocal<string[]>(STORAGE_KEYS.favorites, []);
+}
+
+export function toggleFavoriteAdId(adId: string): string[] {
+  const current = getFavoriteAdIds();
+  const exists = current.includes(adId);
+  const next = exists ? current.filter((id) => id !== adId) : [adId, ...current];
+  writeLocal(STORAGE_KEYS.favorites, next);
+  return next;
+}
+
+// ============================================================================
+// Ad Violation Reports (Public Submit + Admin Moderation)
+// ============================================================================
+export async function submitAdReport(input: {
+  adId?: string | null;
+  adTitle: string;
+  reason: string;
+  details?: string;
+  reporterPhone?: string;
+}): Promise<AdReport> {
+  const adTitle = input.adTitle.trim().slice(0, 200);
+  const reason = input.reason.trim().slice(0, 200);
+  const details = input.details?.trim().slice(0, 800) || null;
+  const reporterPhone = input.reporterPhone?.trim().slice(0, 30) || null;
+
+  if (adTitle.length < 2 || reason.length < 2) {
+    throw new Error('يرجى اختيار سبب الإبلاغ');
+  }
+
+  if (isSupabaseConfigured) {
+    try {
+      const res = await fetch('/api/ads/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'report',
+          deviceId: getOrCreateDeviceId(),
+          adId: input.adId || null,
+          adTitle,
+          reason,
+          details,
+          reporterPhone,
+        }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(json?.error || 'تعذر إرسال البلاغ');
+        }
+        if (json?.report) return json.report as AdReport;
+      }
+    } catch (err: any) {
+      if (err?.message && !String(err.message).toLowerCase().includes('fetch')) {
+        throw err;
+      }
+    }
+  }
+
+  if (supabase) {
+    const id = generateId('rep');
+    const { error } = await supabase.from('elanati_ad_reports').insert({
+      id,
+      ad_id: input.adId || null,
+      ad_title: adTitle,
+      reason,
+      details,
+      reporter_phone: reporterPhone,
+      status: 'open',
+    });
+    if (error) throw new Error(error.message);
+    return {
+      id,
+      ad_id: input.adId || null,
+      ad_title: adTitle,
+      reason,
+      details,
+      reporter_phone: reporterPhone,
+      status: 'open',
+      created_at: new Date().toISOString(),
+    };
+  }
+
+  const report: AdReport = {
+    id: generateId('rep'),
+    ad_id: input.adId || null,
+    ad_title: adTitle,
+    reason,
+    details,
+    reporter_phone: reporterPhone,
+    status: 'open',
+    created_at: new Date().toISOString(),
+  };
+  const existing = readLocal<AdReport[]>(STORAGE_KEYS.adReports, []);
+  writeLocal(STORAGE_KEYS.adReports, [report, ...existing]);
+
+  const logs = readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+  writeLocal(STORAGE_KEYS.accessLogs, [
+    {
+      id: generateId('log'),
+      event_type: 'ad_report',
+      actor_label: reporterPhone ? maskPhoneLocal(reporterPhone) : 'زائر',
+      ip_hint: 'معاينة محلية',
+      reason: `بلاغ: ${reason}`,
+      metadata: { ad_id: input.adId || null, ad_title: adTitle },
+      created_at: new Date().toISOString(),
+    },
+    ...logs.slice(0, 149),
+  ]);
+  return report;
+}
+
+export async function fetchAdReportsAdmin(): Promise<AdReport[]> {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('elanati_ad_reports')
+      .select('id, ad_id, ad_title, reason, details, reporter_phone, status, created_at')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw new Error(error.message);
+    return (data || []) as AdReport[];
+  }
+  return readLocal<AdReport[]>(STORAGE_KEYS.adReports, []);
+}
+
+export async function updateAdReportStatusAdmin(
+  id: string,
+  status: AdReportStatus
+): Promise<void> {
+  if (supabase) {
+    const { error } = await supabase
+      .from('elanati_ad_reports')
+      .update({ status })
+      .eq('id', id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+  const existing = readLocal<AdReport[]>(STORAGE_KEYS.adReports, []);
+  writeLocal(
+    STORAGE_KEYS.adReports,
+    existing.map((r) => (r.id === id ? { ...r, status } : r))
+  );
+}
+
+// ============================================================================
+// Security Access Audit Logs (Admin Login & Anti-Abuse Tracking)
+// ============================================================================
+export async function logAdminLoginEvent(
+  email: string,
+  success: boolean,
+  reason?: string
+): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return;
+
+  if (isSupabaseConfigured && supabase) {
+    const token = success ? await getAdminAccessToken().catch(() => null) : null;
+    try {
+      const res = await fetch('/api/admin/access-log', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          action: 'login_attempt',
+          email: cleanEmail,
+          success,
+          reason: reason || '',
+          deviceId: getOrCreateDeviceId(),
+        }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json') && res.ok) return;
+    } catch {
+      // fall through to Supabase RPC fallback
+    }
+
+    await supabase.rpc('log_elanati_admin_login_attempt', {
+      p_email: cleanEmail,
+      p_success: success,
+      p_reason: reason || null,
+    });
+    return;
+  }
+
+  const parts = cleanEmail.split('@');
+  const masked =
+    parts.length === 2 ? `${parts[0].slice(0, 2)}***@${parts[1]}` : `${cleanEmail.slice(0, 2)}***`;
+  const logs = readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+  writeLocal(STORAGE_KEYS.accessLogs, [
+    {
+      id: generateId('log'),
+      event_type: success ? 'admin_login_success' : 'admin_login_failed',
+      actor_label: masked,
+      ip_hint: 'معاينة محلية',
+      reason: reason || (success ? 'دخول ناجح' : 'محاولة دخول فاشلة'),
+      created_at: new Date().toISOString(),
+    },
+    ...logs.slice(0, 149),
+  ]);
+}
+
+export async function fetchAccessLogsAdmin(): Promise<AccessLogEntry[]> {
+  if (supabase) {
+    const token = await getAdminAccessToken().catch(() => null);
+    if (token) {
+      try {
+        const res = await fetch('/api/admin/access-log', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json') && res.ok) {
+          const json = await res.json().catch(() => null);
+          if (Array.isArray(json?.logs)) {
+            return json.logs as AccessLogEntry[];
+          }
+        }
+      } catch {
+        // fallback to direct admin RLS query
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('elanati_access_logs')
+      .select('id, event_type, actor_label, ip_hint, reason, metadata, created_at')
+      .order('created_at', { ascending: false })
+      .limit(150);
+    if (error) throw new Error(error.message);
+    return (data || []) as AccessLogEntry[];
+  }
+  return readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+}
+
+export async function clearOldAccessLogsAdmin(): Promise<void> {
+  const cutoffIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  if (supabase) {
+    const { error } = await supabase
+      .from('elanati_access_logs')
+      .delete()
+      .lt('created_at', cutoffIso);
+    if (error) throw new Error(error.message);
+    return;
+  }
+  const existing = readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+  writeLocal(
+    STORAGE_KEYS.accessLogs,
+    existing.filter((l) => l.created_at >= cutoffIso)
+  );
 }

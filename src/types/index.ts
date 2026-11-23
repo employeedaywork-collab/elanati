@@ -1,6 +1,9 @@
 export type AdCategory = string;
 export type AdStatus = 'pending' | 'approved' | 'rejected' | 'archived';
 export type PaymentMethod = 'vodafone_cash' | 'instapay' | 'bank_transfer';
+export type ItemCondition = 'new' | 'used' | 'unspecified';
+
+export type AdSpecs = Record<string, string | number | boolean | null | undefined>;
 
 export interface CategoryItem {
   id: string;
@@ -23,6 +26,13 @@ export interface Ad {
   image_url?: string | null;
   extra_images?: string[];
   banner_url?: string | null;
+  price?: number | null;
+  price_negotiable?: boolean;
+  item_condition?: ItemCondition;
+  specs?: AdSpecs | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_address?: string | null;
   package_name?: string;
   subscription_code?: string | null;
   owner_pin?: string | null;
@@ -157,9 +167,42 @@ export interface AdAllowance {
   featured: boolean;
   priority_rank: number;
   allow_extra_images: boolean;
+  max_images?: number;
   allow_banner: boolean;
   free_trial_used?: boolean;
-  free_block_reason?: 'phone' | 'name' | 'both' | null;
+  free_block_reason?: 'phone' | 'name' | 'ip_device' | 'both' | null;
+  cooldown_days?: number;
+}
+
+export type AccessLogEventType =
+  | 'admin_login_success'
+  | 'admin_login_failed'
+  | 'ad_submit_ok'
+  | 'ad_submit_blocked'
+  | 'otp_request'
+  | 'ad_report';
+
+export interface AccessLogEntry {
+  id: string;
+  event_type: AccessLogEventType;
+  actor_label?: string | null;
+  ip_hint?: string | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export type AdReportStatus = 'open' | 'reviewed' | 'dismissed';
+
+export interface AdReport {
+  id: string;
+  ad_id?: string | null;
+  ad_title: string;
+  reason: string;
+  details?: string | null;
+  reporter_phone?: string | null;
+  status: AdReportStatus;
+  created_at: string;
 }
 
 export interface ClientPortalData {

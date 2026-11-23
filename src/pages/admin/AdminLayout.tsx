@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Send,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Volume2,
   VolumeX,
@@ -55,6 +56,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/admin/inbox': 'مركز التواصل والرسائل',
   '/admin/packages': 'متابعة الاشتراكات والدفعات',
   '/admin/automation': 'الأتمتة والواتساب',
+  '/admin/security': 'سجل الدخول والأمان',
   '/admin/settings': 'المحتوى والإعدادات',
 };
 
@@ -119,6 +121,8 @@ export default function AdminLayout() {
     openTickets: 0,
     pendingPackages: 0,
     pendingOtps: 0,
+    openReports: 0,
+    blockedAttempts: 0,
   });
   const [pendingOtpItems, setPendingOtpItems] = useState<PendingPortalOtp[]>([]);
   const [soundMuted, setSoundMuted] = useState<boolean>(() => {
@@ -481,6 +485,20 @@ export default function AdminLayout() {
             void refreshShell();
           }
         )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_access_logs' },
+          () => {
+            void refreshShell();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'elanati_ad_reports' },
+          () => {
+            void refreshShell();
+          }
+        )
         .subscribe();
 
       return () => {
@@ -530,6 +548,12 @@ export default function AdminLayout() {
       badge: badges.pendingPackages,
     },
     { to: '/admin/automation', label: 'الأتمتة والواتساب', icon: Bot, badge: badges.pendingOtps },
+    {
+      to: '/admin/security',
+      label: 'سجل الدخول والأمان',
+      icon: ShieldAlert,
+      badge: badges.openReports + badges.blockedAttempts,
+    },
     { to: '/admin/settings', label: 'المحتوى والإعدادات', icon: Settings },
   ];
 

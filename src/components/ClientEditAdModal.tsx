@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Edit3, KeyRound, PlusCircle, X } from 'lucide-react';
 import { DEFAULT_CATEGORIES, EGYPT_GOVERNORATES } from '../data/seedData';
 import { editAdByClient, getSavedAdPin } from '../services/dataService';
-import { Ad, AdCategory } from '../types';
+import { Ad, AdCategory, AdSpecs, ItemCondition } from '../types';
+import AdImageUploader from './AdImageUploader';
+import CategorySpecsFields from './CategorySpecsFields';
+import GoogleMapLocationPicker from './GoogleMapLocationPicker';
 
 const CUSTOM_CATEGORY_VALUE = '__custom__';
 
@@ -21,7 +24,6 @@ export default function ClientEditAdModal({
   onClose,
   onSaved,
 }: ClientEditAdModalProps) {
-  const initialInList = categories.includes(ad.category);
   const [verifyCode, setVerifyCode] = useState(() => {
     const savedPin = getSavedAdPin(ad.id);
     if (savedPin) return savedPin;
@@ -35,31 +37,44 @@ export default function ClientEditAdModal({
     }
     return '';
   });
+
   const [form, setForm] = useState({
     title: ad.title,
-    category: (initialInList ? ad.category : ad.category) as AdCategory,
+    category: ad.category as AdCategory,
     custom_category: '',
     city: ad.city,
     description: ad.description,
     image: ad.image || '📦',
     image_url: ad.image_url || '',
+    extra_images: Array.isArray(ad.extra_images) ? ad.extra_images : [],
+    price: ad.price !== null && ad.price !== undefined ? String(ad.price) : '',
+    price_negotiable: Boolean(ad.price_negotiable),
+    item_condition: (ad.item_condition || 'unspecified') as ItemCondition,
+    specs: (ad.specs || {}) as AdSpecs,
+    latitude: ad.latitude ?? null,
+    longitude: ad.longitude ?? null,
+    location_address: ad.location_address || '',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
 
-  const emojis = ['📦', '💻', '👔', '💄', '🪑', '🏗️', '🍕', '🚗', '📱', '🏠', '💊', '🎁'];
+  const emojis = ['📦', '🚗', '🏠', '💻', '👔', '💄', '🪑', '🏗️', '🍕', '📱', '💊', '🎁'];
   const allCategoryOptions = Array.from(
     new Set([...categories, ...(ad.category ? [ad.category] : [])])
   );
 
+  const resolvedCategory =
+    form.category === CUSTOM_CATEGORY_VALUE
+      ? form.custom_category.trim().replace(/\s+/g, ' ')
+      : form.category.trim();
+
+  const isPaid = (ad.package_name || 'مجاني') !== 'مجاني';
+  const maxImages = isPaid ? 6 : 1;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const resolvedCategory =
-      form.category === CUSTOM_CATEGORY_VALUE
-        ? form.custom_category.trim().replace(/\s+/g, ' ')
-        : form.category.trim();
 
     if (resolvedCategory.length < 2) {
       setError('يرجى اختيار أو كتابة اسم تصنيف صحيح');
@@ -70,6 +85,11 @@ export default function ClientEditAdModal({
       setError('يرجى إدخال كود تعديل الإعلان أو كود الاشتراك للتحقق من الملكية');
       return;
     }
+
+    const parsedPrice =
+      form.price.trim() !== '' && Number.isFinite(Number(form.price))
+        ? Math.max(0, Number(form.price))
+        : null;
 
     setSaving(true);
     try {
@@ -82,6 +102,14 @@ export default function ClientEditAdModal({
         description: form.description,
         image: form.image,
         image_url: form.image_url,
+        extra_images: isPaid ? form.extra_images : [],
+        price: parsedPrice,
+        price_negotiable: form.price_negotiable,
+        item_condition: form.item_condition,
+        specs: form.specs,
+        latitude: form.latitude,
+        longitude: form.longitude,
+        location_address: form.location_address.trim() || null,
       });
       setDone(true);
       await onSaved(updated);
@@ -95,7 +123,7 @@ export default function ClientEditAdModal({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
+      <div className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200">
         <div className="sticky top-0 bg-white rounded-t-3xl border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-2">
             <Edit3 className="w-5 h-5 text-blue-700" />
@@ -239,6 +267,50 @@ export default function ClientEditAdModal({
               </div>
             )}
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  السعر بالجنيه المصري (اختياري)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={form.price}
+                  onChange={(e) => setForm({ ...form, price: e.target.value })}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm tabular-nums outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                <label className="inline-flex items-center gap-2 mt-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.price_negotiable}
+                    onChange={(e) => setForm({ ...form, price_negotiable: e.target.checked })}
+                  />
+                  قابل للتفاوض
+                </label>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">الحالة</label>
+                <select
+                  value={form.item_condition}
+                  onChange={(e) =>
+                    setForm({ ...form, item_condition: e.target.value as ItemCondition })
+                  }
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl bg-white text-sm outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                  <option value="unspecified">غير محدد</option>
+                  <option value="new">جديد</option>
+                  <option value="used">مستعمل</option>
+                </select>
+              </div>
+            </div>
+
+            <CategorySpecsFields
+              category={resolvedCategory}
+              specs={form.specs}
+              onChange={(nextSpecs) => setForm({ ...form, specs: nextSpecs })}
+            />
+
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">وصف الإعلان *</label>
               <textarea
@@ -250,19 +322,28 @@ export default function ClientEditAdModal({
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                رابط الصورة الرئيسية (اختياري)
-              </label>
-              <input
-                type="url"
-                value={form.image_url}
-                onChange={(e) => setForm({ ...form, image_url: e.target.value })}
-                placeholder="https://example.com/product.jpg"
-                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-left outline-none focus:ring-2 focus:ring-blue-600"
-                dir="ltr"
-              />
-            </div>
+            <AdImageUploader
+              imageUrl={form.image_url}
+              extraImages={form.extra_images}
+              maxImages={maxImages}
+              onChange={(mainUrl, extras) =>
+                setForm((prev) => ({ ...prev, image_url: mainUrl, extra_images: extras }))
+              }
+            />
+
+            <GoogleMapLocationPicker
+              latitude={form.latitude}
+              longitude={form.longitude}
+              locationAddress={form.location_address}
+              onChange={({ latitude, longitude, locationAddress }) =>
+                setForm((prev) => ({
+                  ...prev,
+                  latitude,
+                  longitude,
+                  location_address: locationAddress,
+                }))
+              }
+            />
 
             <div className="flex gap-2.5 pt-2">
               <button

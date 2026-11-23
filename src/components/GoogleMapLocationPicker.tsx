@@ -268,20 +268,44 @@ export default function GoogleMapLocationPicker({
       return;
     }
     setLocating(true);
+
+    const onSuccess = (pos: GeolocationPosition) => {
+      setLocating(false);
+      onChange({
+        latitude: Number(pos.coords.latitude.toFixed(6)),
+        longitude: Number(pos.coords.longitude.toFixed(6)),
+        locationAddress,
+      });
+    };
+
+    const showGeoError = (err: GeolocationPositionError) => {
+      setLocating(false);
+      if (err.code === 1) {
+        setGeoError(
+          'تم حظر صلاحية الموقع من المتصفح أو المعاينة؛ يرجى تفعيل الموقع من أيقونة القفل بجانب رابط الموقع أو تحديد النقطة مباشرة على الخريطة.'
+        );
+      } else if (err.code === 3) {
+        setGeoError('انتهت مهلة تحديد الموقع التلقائي؛ يمكنك الضغط على الخريطة أو البحث باسم المنطقة.');
+      } else {
+        setGeoError('تعذر تحديد موقعك تلقائياً من الجهاز؛ يمكنك اختيار النقطة مباشرة على الخريطة أو البحث بالاسم.');
+      }
+    };
+
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocating(false);
-        onChange({
-          latitude: Number(pos.coords.latitude.toFixed(6)),
-          longitude: Number(pos.coords.longitude.toFixed(6)),
-          locationAddress,
+      onSuccess,
+      (err) => {
+        if (err.code === 1) {
+          showGeoError(err);
+          return;
+        }
+        // Fallback to network/coarse location (especially helpful on desktops/laptops)
+        navigator.geolocation.getCurrentPosition(onSuccess, showGeoError, {
+          enableHighAccuracy: false,
+          timeout: 12000,
+          maximumAge: 60000,
         });
       },
-      () => {
-        setLocating(false);
-        setGeoError('يرجى السماح بصلاحية الموقع من إعدادات المتصفح أو اختيار النقطة على الخريطة');
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
     );
   };
 

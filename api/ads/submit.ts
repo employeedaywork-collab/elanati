@@ -1,5 +1,10 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import * as webpushModule from 'web-push';
+
+const webpush = (
+  (webpushModule as unknown as { default?: typeof webpushModule }).default || webpushModule
+) as typeof webpushModule;
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -483,6 +488,102 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
         package_name: allowance.package_name,
       },
     });
+
+    if (status === 'pending') {
+      // A) Web Push notification to Admin devices (works even when browser is closed)
+      try {
+        const envPub = (process.env.VAPID_PUBLIC_KEY || '').trim();
+        const envPriv = (process.env.VAPID_PRIVATE_KEY || '').trim();
+        const envSubj = (process.env.VAPID_SUBJECT || 'mailto:admin@elanati.app').trim();
+
+        let vapidPub = envPub;
+        let vapidPriv = envPriv;
+        let vapidSubj = envSubj;
+
+        if (!vapidPub || !vapidPriv) {
+          const { data: vRow } = await supabase
+            .from('elanati_push_vapid_keys')
+            .select('public_key, private_key, subject')
+            .eq('id', 1)
+            .maybeSingle();
+          if (vRow?.public_key && vRow?.private_key) {
+            vapidPub = String(vRow.public_key);
+            vapidPriv = String(vRow.private_key);
+            vapidSubj = String(vRow.subject || envSubj);
+          }
+        }
+
+        if (vapidPub && vapidPriv) {
+          const { data: pushSubs } = await supabase
+            .from('elanati_admin_push_subscriptions')
+            .select('id, endpoint, p256dh, auth')
+            .limit(20);
+
+          if (pushSubs && pushSubs.length > 0) {
+            webpush.setVapidDetails(vapidSubj, vapidPub, vapidPriv);
+            const pushPayload = JSON.stringify({
+              title: '📢 إعلان جديد بانتظار الاعتماد — إعلاناتي',
+              body: `${clientName} أضاف «${title}» (${category} · ${city}). اضغط للمراجعة والاعتماد.`,
+              tag: `elanati-pending-ad-${inserted.id}`,
+              url: '/admin/ads',
+            });
+
+            const expiredIds: string[] = [];
+            await Promise.all(
+              pushSubs.map(async (sub: any) => {
+                try {
+                  await webpush.sendNotification(
+                    {
+                      endpoint: sub.endpoint,
+                      keys: { p256dh: sub.p256dh, auth: sub.auth },
+                    },
+                    pushPayload,
+                    { TTL: 600 }
+                  );
+                } catch (pushErr: any) {
+                  if (pushErr?.statusCode === 404 || pushErr?.statusCode === 410) {
+                    expiredIds.push(sub.id);
+                  }
+                }
+              })
+            );
+
+            if (expiredIds.length > 0) {
+              await supabase
+                .from('elanati_admin_push_subscriptions')
+                .delete()
+                .in('id', expiredIds);
+            }
+          }
+        }
+      } catch {
+        // Non-blocking Web Push alert
+      }
+
+      // B) Optional Telegram Admin alert if configured
+      const tgBotToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+      const tgChatId = (process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim();
+      if (tgBotToken && tgChatId && /^[0-9]+:[A-Za-z0-9_-]{20,}$/.test(tgBotToken)) {
+        try {
+          await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: tgChatId,
+              text:
+                `📢 إعلان جديد بانتظار الاعتماد — منصة إعلاناتي\n\n` +
+                `📝 العنوان: ${title}\n` +
+                `👤 المعلن: ${clientName}\n` +
+                `📂 القسم: ${category} · 📍 ${city}\n` +
+                `📦 الباقة: ${allowance.package_name}`,
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch {
+          // Non-blocking admin alert
+        }
+      }
+    }
 
     return res.status(200).json({
       ok: true,

@@ -151,6 +151,7 @@ export default function AdminLayout() {
   const swRegRef = useRef<ServiceWorkerRegistration | null>(null);
   const seenOtpIdsRef = useRef<Set<string>>(new Set());
   const firstOtpLoadRef = useRef(true);
+  const seenPendingAdsRef = useRef<number | null>(null);
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -180,7 +181,7 @@ export default function AdminLayout() {
   }, [session]);
 
   const showMobileOrDesktopNotif = useCallback(
-    async (title: string, body: string, tag?: string) => {
+    async (title: string, body: string, tag?: string, targetUrl = '/admin/automation') => {
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
       try {
         const reg =
@@ -195,7 +196,7 @@ export default function AdminLayout() {
             tag,
             renotify: true,
             vibrate: [220, 120, 220],
-            data: { url: '/admin/automation' },
+            data: { url: targetUrl },
           } as NotificationOptions);
           return;
         }
@@ -207,7 +208,7 @@ export default function AdminLayout() {
         const n = new Notification(title, { body, tag });
         n.onclick = () => {
           window.focus();
-          navigate('/admin/automation');
+          navigate(targetUrl);
           n.close();
         };
       } catch {
@@ -244,7 +245,38 @@ export default function AdminLayout() {
       void showMobileOrDesktopNotif(
         'طلب رمز تحقق (OTP) جديد — إعلاناتي',
         `العميل (+${latest.phone_digits}) يطلب استلام رمز التحقق (${latest.manual_otp_code || ''}) عبر واتساب الآن.`,
-        `elanati-otp-${latest.id}`
+        `elanati-otp-${latest.id}`,
+        '/admin/automation'
+      );
+    },
+    [showMobileOrDesktopNotif, soundMuted]
+  );
+
+  const notifyPendingAds = useCallback(
+    (pendingAdsCount: number) => {
+      const prev = seenPendingAdsRef.current;
+      seenPendingAdsRef.current = pendingAdsCount;
+
+      if (prev === null || pendingAdsCount <= prev) {
+        return;
+      }
+
+      if (!soundMuted) {
+        playOtpAlertChime();
+      }
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try {
+          navigator.vibrate([220, 120, 220]);
+        } catch {
+          // ignore vibration restrictions
+        }
+      }
+
+      void showMobileOrDesktopNotif(
+        '📢 إعلان جديد بانتظار الاعتماد — إعلاناتي',
+        `يوجد الآن ${pendingAdsCount} إعلان بانتظار المراجعة والاعتماد في لوحة الإدارة.`,
+        'elanati-pending-ads',
+        '/admin/ads'
       );
     },
     [showMobileOrDesktopNotif, soundMuted]
@@ -267,12 +299,13 @@ export default function AdminLayout() {
       });
       setPendingOtpItems(otpItems);
       notifyNewOtpRequests(otpItems);
+      notifyPendingAds(counts.pendingAds);
       lastShellRefreshAtRef.current = Date.now();
       setRefreshTick((t) => t + 1);
     } finally {
       setRefreshing(false);
     }
-  }, [notifyNewOtpRequests, session]);
+  }, [notifyNewOtpRequests, notifyPendingAds, session]);
 
   const scheduleShellRefresh = useCallback(() => {
     if (shellRefreshTimerRef.current !== null) {
@@ -285,16 +318,21 @@ export default function AdminLayout() {
   }, [refreshShell]);
 
   useEffect(() => {
-    const defaultTitle = `${settings.site_name || 'إعلاناتي'} — لوحة تحكم المدير`;
-    if (badges.pendingOtps > 0) {
-      document.title = `🔔 (${badges.pendingOtps}) طلب كود OTP — ${settings.site_name || 'إعلاناتي'}`;
+    const siteName = settings.site_name || 'إعلاناتي';
+    const defaultTitle = `${siteName} — لوحة تحكم المدير`;
+    if (badges.pendingOtps > 0 && badges.pendingAds > 0) {
+      document.title = `🔔 (${badges.pendingOtps}) OTP · (${badges.pendingAds}) إعلان — ${siteName}`;
+    } else if (badges.pendingOtps > 0) {
+      document.title = `🔔 (${badges.pendingOtps}) طلب كود OTP — ${siteName}`;
+    } else if (badges.pendingAds > 0) {
+      document.title = `📢 (${badges.pendingAds}) إعلان بانتظار الاعتماد — ${siteName}`;
     } else {
       document.title = defaultTitle;
     }
     return () => {
       document.title = defaultTitle;
     };
-  }, [badges.pendingOtps, settings.site_name]);
+  }, [badges.pendingAds, badges.pendingOtps, settings.site_name]);
 
   const toggleSoundMute = () => {
     setSoundMuted((prev) => {
@@ -471,16 +509,22 @@ export default function AdminLayout() {
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
-    // Polling fallback every 15s so OTP alerts trigger reliably even without WebSocket/Realtime
+    // Polling fallback every 15s so OTP and pending-ad alerts trigger reliably even without WebSocket/Realtime
     const pollTimer = window.setInterval(() => {
       void Promise.all([fetchAdminBadgeCounts(), fetchPendingPortalOtpsAdmin()]).then(
         ([counts, otpItems]) => {
+          const hadIncrease =
+            seenPendingAdsRef.current !== null && counts.pendingAds > seenPendingAdsRef.current;
           setBadges({
             ...counts,
             pendingOtps: Math.max(counts.pendingOtps, otpItems.length),
           });
           setPendingOtpItems(otpItems);
           notifyNewOtpRequests(otpItems);
+          notifyPendingAds(counts.pendingAds);
+          if (hadIncrease) {
+            setRefreshTick((t) => t + 1);
+          }
         }
       );
     }, 15000);
@@ -577,7 +621,7 @@ export default function AdminLayout() {
         void client.removeChannel(channel);
       }
     };
-  }, [notifyNewOtpRequests, refreshShell, scheduleShellRefresh, session]);
+  }, [notifyNewOtpRequests, notifyPendingAds, refreshShell, scheduleShellRefresh, session]);
 
   const handleSignOut = async () => {
     await signOutAdmin();
@@ -786,8 +830,8 @@ export default function AdminLayout() {
               className="relative lg:hidden p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50"
             >
               <Menu className="w-5 h-5" />
-              {badges.pendingOtps > 0 && (
-                <span className="absolute -top-1 -left-1 w-3 h-3 rounded-full bg-emerald-600 ring-2 ring-white animate-pulse" />
+              {(badges.pendingOtps > 0 || badges.pendingAds > 0) && (
+                <span className="absolute -top-1 -left-1 w-3 h-3 rounded-full bg-amber-500 ring-2 ring-white animate-pulse" />
               )}
             </button>
             <div>
@@ -799,6 +843,16 @@ export default function AdminLayout() {
           </div>
 
           <div className="flex items-center gap-2">
+            {badges.pendingAds > 0 && (
+              <Link
+                to="/admin/ads"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-extrabold transition-colors animate-pulse"
+              >
+                <Megaphone className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">بانتظار الاعتماد:</span>
+                <span className="tabular-nums">{badges.pendingAds}</span>
+              </Link>
+            )}
             {badges.pendingOtps > 0 && (
               <Link
                 to="/admin/automation"
@@ -963,6 +1017,34 @@ export default function AdminLayout() {
                   className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-100 text-emerald-900 text-xs font-bold transition-colors"
                 >
                   فتح قائمة الأكواد
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {badges.pendingAds > 0 && location.pathname !== '/admin/ads' && (
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0">
+                  <Megaphone className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-extrabold text-amber-950">
+                    تنبيه: يوجد {badges.pendingAds} إعلان جديد بانتظار المراجعة والاعتماد!
+                  </p>
+                  <p className="text-xs text-amber-900">
+                    قام أحد المعلنين بإضافة إعلان جديد ولن يظهر للجمهور إلا بعد اعتماده من قسم إدارة الإعلانات.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <Link
+                  to="/admin/ads"
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-extrabold transition-colors"
+                >
+                  <Megaphone className="w-3.5 h-3.5" />
+                  مراجعة واعتماد الإعلانات الآن
                 </Link>
               </div>
             </div>

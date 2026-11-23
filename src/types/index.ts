@@ -175,6 +175,7 @@ export interface AdAllowance {
 }
 
 export type AccessLogEventType =
+  | 'site_visit'
   | 'admin_login_success'
   | 'admin_login_failed'
   | 'ad_submit_ok'

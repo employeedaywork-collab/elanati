@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import PublicLayout from './components/PublicLayout';
 import HomePage from './pages/HomePage';
+import { logSiteVisit } from './services/dataService';
 
 const FeaturesPage = lazy(() => import('./pages/FeaturesPage'));
 const PackagesPage = lazy(() => import('./pages/PackagesPage'));
@@ -44,6 +45,10 @@ export default function App() {
     const handleQuotaExceeded = () => setMapsQuotaExceeded(true);
     window.addEventListener('gmp-quota-exceeded', handleQuotaExceeded);
     return () => window.removeEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+  }, []);
+
+  useEffect(() => {
+    void logSiteVisit(window.location.pathname || '/');
   }, []);
 
   return (

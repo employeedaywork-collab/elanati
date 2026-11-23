@@ -60,6 +60,27 @@ function extractBearerToken(req: VercelRequestLike): string {
   return raw.slice(7).trim();
 }
 
+function parseVisitorAgent(ua: string): string {
+  const s = ua.toLowerCase();
+  if (!s) return 'زائر متصفح';
+  let browser = 'متصفح';
+  if (s.includes('edg/')) browser = 'Edge';
+  else if (s.includes('opr/') || s.includes('opera')) browser = 'Opera';
+  else if (s.includes('firefox/')) browser = 'Firefox';
+  else if (s.includes('chrome/') && !s.includes('edg/')) browser = 'Chrome';
+  else if (s.includes('safari/') && !s.includes('chrome/')) browser = 'Safari';
+
+  let os = 'جهاز';
+  if (s.includes('iphone')) os = 'iPhone';
+  else if (s.includes('ipad')) os = 'iPad';
+  else if (s.includes('android')) os = 'Android';
+  else if (s.includes('windows')) os = 'Windows';
+  else if (s.includes('mac os') || s.includes('macintosh')) os = 'Mac';
+  else if (s.includes('linux')) os = 'Linux';
+
+  return `${browser} · ${os}`;
+}
+
 async function verifyAdminCaller(supabase: any, req: VercelRequestLike): Promise<{ email: string } | null> {
   const token = extractBearerToken(req);
   if (!token) return null;
@@ -133,12 +154,17 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
       (r: any) => r.event_type === 'ad_submit_blocked' && r.created_at >= since24h
     ).length;
 
+    const siteVisits24h = rows.filter(
+      (r: any) => r.event_type === 'site_visit' && r.created_at >= since24h
+    ).length;
+
     return res.status(200).json({
       ok: true,
       logs: rows,
       summary: {
         failedLogins24h,
         blockedSubmits24h,
+        siteVisits24h,
       },
     });
   }
@@ -146,6 +172,54 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
   if (req.method === 'POST') {
     const body = req.body || {};
     const action = String(body.action || 'login_attempt').trim();
+    const rawDeviceId = String(body.deviceId || '').trim();
+    const deviceHash = rawDeviceId.length >= 8 ? hashValue(pepper, 'dev', rawDeviceId) : '';
+
+    if (action === 'site_visit') {
+      const visitPath = String(body.path || '/').trim().slice(0, 100) || '/';
+      const ua = getHeader(req, 'user-agent');
+      const visitorAgent = parseVisitorAgent(ua);
+
+      if (deviceHash) {
+        const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+        const { count: recentSameDevice } = await supabase
+          .from('elanati_access_logs')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_type', 'site_visit')
+          .eq('device_hash', deviceHash)
+          .gte('created_at', threeMinutesAgo);
+
+        if ((recentSameDevice || 0) > 0) {
+          return res.status(200).json({ ok: true, deduplicated: true });
+        }
+      }
+
+      if (ipHash) {
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const { count: hourlyVisits } = await supabase
+          .from('elanati_access_logs')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_type', 'site_visit')
+          .eq('ip_hash', ipHash)
+          .gte('created_at', oneHourAgo);
+
+        if ((hourlyVisits || 0) >= 30) {
+          return res.status(200).json({ ok: true, throttled: true });
+        }
+      }
+
+      await supabase.from('elanati_access_logs').insert({
+        event_type: 'site_visit',
+        actor_label: visitorAgent,
+        ip_hint: ipHint,
+        ip_hash: ipHash || null,
+        device_hash: deviceHash || null,
+        reason: `دخول زائر للمنصة (${visitPath})`,
+        metadata: { source: 'public_visit', path: visitPath, agent: visitorAgent },
+      });
+
+      return res.status(200).json({ ok: true });
+    }
 
     if (action !== 'login_attempt') {
       return res.status(400).json({ error: 'إجراء غير صالح' });
@@ -154,8 +228,6 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
     const email = String(body.email || '').trim().toLowerCase().slice(0, 120);
     const requestedSuccess = Boolean(body.success);
     const reason = String(body.reason || '').trim().slice(0, 200);
-    const rawDeviceId = String(body.deviceId || '').trim();
-    const deviceHash = rawDeviceId.length >= 8 ? hashValue(pepper, 'dev', rawDeviceId) : '';
 
     if (requestedSuccess) {
       const admin = await verifyAdminCaller(supabase, req);

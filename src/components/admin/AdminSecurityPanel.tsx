@@ -20,6 +20,10 @@ interface AdminSecurityPanelProps {
 }
 
 const EVENT_META: Record<AccessLogEventType, { label: string; cls: string }> = {
+  site_visit: {
+    label: 'دخول للمنصة (زائر)',
+    cls: 'bg-indigo-50 text-indigo-800 border border-indigo-200',
+  },
   admin_login_success: {
     label: 'دخول مدير ناجح',
     cls: 'bg-emerald-50 text-emerald-800 border border-emerald-200',
@@ -70,6 +74,7 @@ export default function AdminSecurityPanel({
   ).length;
   const blockedAttempts = logs.filter((l) => l.event_type === 'ad_submit_blocked').length;
   const acceptedAds = logs.filter((l) => l.event_type === 'ad_submit_ok').length;
+  const siteVisitsCount = logs.filter((l) => l.event_type === 'site_visit').length;
   const openReportsCount = reports.filter((r) => r.status === 'open').length;
 
   const filteredLogs = logs.filter((l) => eventFilter === 'all' || l.event_type === eventFilter);
@@ -175,6 +180,7 @@ export default function AdminSecurityPanel({
             {(
               [
                 ['all', 'الكل'],
+                ['site_visit', `زيارات المنصة (${siteVisitsCount})`],
                 ['ad_submit_blocked', 'محاولات تلاعب محظورة'],
                 ['admin_login_failed', 'دخول فاشل'],
                 ['admin_login_success', 'دخول ناجح'],

@@ -3089,6 +3089,83 @@ export async function logAdminLoginEvent(
   ]);
 }
 
+const SITE_VISIT_SESSION_KEY = 'elanati_visit_logged_v1';
+
+function detectClientBrowserLabel(): string {
+  if (typeof navigator === 'undefined') return 'زائر متصفح';
+  const ua = (navigator.userAgent || '').toLowerCase();
+  let browser = 'متصفح';
+  if (ua.includes('edg/')) browser = 'Edge';
+  else if (ua.includes('opr/') || ua.includes('opera')) browser = 'Opera';
+  else if (ua.includes('firefox/')) browser = 'Firefox';
+  else if (ua.includes('chrome/')) browser = 'Chrome';
+  else if (ua.includes('safari/')) browser = 'Safari';
+
+  let os = 'جهاز';
+  if (ua.includes('iphone')) os = 'iPhone';
+  else if (ua.includes('ipad')) os = 'iPad';
+  else if (ua.includes('android')) os = 'Android';
+  else if (ua.includes('windows')) os = 'Windows';
+  else if (ua.includes('mac os') || ua.includes('macintosh')) os = 'Mac';
+  else if (ua.includes('linux')) os = 'Linux';
+
+  return `${browser} · ${os}`;
+}
+
+export async function logSiteVisit(path = '/'): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    if (sessionStorage.getItem(SITE_VISIT_SESSION_KEY) === '1') {
+      return;
+    }
+    sessionStorage.setItem(SITE_VISIT_SESSION_KEY, '1');
+  } catch {
+    // proceed even if sessionStorage is unavailable
+  }
+
+  const cleanPath = (path || '/').slice(0, 100);
+  const agentLabel = detectClientBrowserLabel();
+
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const res = await fetch('/api/admin/access-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'site_visit',
+          path: cleanPath,
+          deviceId: getOrCreateDeviceId(),
+        }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json') && res.ok) return;
+    } catch {
+      // fall through to Supabase RPC fallback
+    }
+
+    await supabase
+      .rpc('log_elanati_site_visit', {
+        p_path: cleanPath,
+        p_device_hint: agentLabel,
+      })
+      .then(() => undefined, () => undefined);
+    return;
+  }
+
+  const logs = readLocal<AccessLogEntry[]>(STORAGE_KEYS.accessLogs, []);
+  writeLocal(STORAGE_KEYS.accessLogs, [
+    {
+      id: generateId('log'),
+      event_type: 'site_visit',
+      actor_label: agentLabel,
+      ip_hint: 'معاينة محلية',
+      reason: `دخول زائر للمنصة (${cleanPath})`,
+      created_at: new Date().toISOString(),
+    },
+    ...logs.slice(0, 149),
+  ]);
+}
+
 export async function fetchAccessLogsAdmin(): Promise<AccessLogEntry[]> {
   if (supabase) {
     const token = await getAdminAccessToken().catch(() => null);
